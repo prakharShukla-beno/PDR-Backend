@@ -42,3 +42,6 @@ const enrichmentSchema = new mongoose.Schema(
 
 const Enrichment = mongoose.model("Enrichment", enrichmentSchema);
 export default Enrichment;
+
+
+// {{BASE_URL}}/api/v1/departments

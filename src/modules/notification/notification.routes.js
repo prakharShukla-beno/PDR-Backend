@@ -7,6 +7,7 @@ const router = Router();
 router.use(authMiddleware);
 
 
+
 router.get("/",notificationController.getAll);
 
 
