@@ -40,8 +40,5 @@ const enrichmentSchema = new mongoose.Schema(
   }
 );
 
-// Fast lookup by prospectId
-enrichmentSchema.index({ prospectId: 1 });
-
 const Enrichment = mongoose.model("Enrichment", enrichmentSchema);
 export default Enrichment;
