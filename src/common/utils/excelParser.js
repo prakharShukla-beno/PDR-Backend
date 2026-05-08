@@ -1,4 +1,5 @@
-import * as XLSX from "xlsx";
+import pkg from "xlsx";
+const { readFile, utils } = pkg;
 
 // ─── Excel field name → DB field name mapping ─────────────────────────────────
 
@@ -95,19 +96,13 @@ const ENUM_FIELDS = {
 
 // Parse Excel file and return structured rows
 const parseExcel = (filePath) => {
-  // Read file from disk
-  const workbook = XLSX.readFile(filePath);
-
-  // First sheet lo
+  const workbook = readFile(filePath);
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-
-  // Convert sheet to JSON — first row = headers
-  const rawRows = XLSX.utils.sheet_to_json(sheet, {
-    defval: null,    // Empty cells = null (not undefined)
-    raw: false,      // All values as strings — we handle types
+  const rawRows = utils.sheet_to_json(sheet, {
+    defval: null,
+    raw: false,
   });
-
   return rawRows;
 };
 

@@ -3,7 +3,18 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import errorMiddleware from "./common/middlewares/error.middleware.js";
-import router from "./routes/index.js"; // ← Ye add karo
+import router from "./routes/index.js";
+
+// ─── Model Imports ─────────────────────────────────────────────────────────────
+
+import "./modules/user/user.model.js";
+import "./modules/prospect/prospect.model.js";
+import "./modules/campaign/campaign.model.js";
+import "./modules/importLog/importLog.model.js";
+import "./modules/interaction/interaction.model.js";
+import "./modules/enrichment/enrichment.model.js";
+import "./modules/notification/notification.model.js";
+import "./modules/duplicate/duplicate.model.js";
 
 const app = express();
 
@@ -21,8 +32,7 @@ app.get("/health", (req, res) => {
   });
 });
 
-// ─── API Routes ────────────────────────────────────────────────────────────────
-app.use("/api", router); // ← Ye add karo
+app.use("/api", router);
 
 app.use((req, res) => {
   res.status(404).json({
