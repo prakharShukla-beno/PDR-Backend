@@ -2,29 +2,32 @@ import notificationService from "./notification.service.js";
 
 const notificationController = {
 
-  // GET /api/notifications
+  // GET /api/notifications — user ki saari notifications
   getAll: async (req, res, next) => {
     try {
-      const result = await notificationService.getAll(
-        req.user._id,
-        req.query
-      );
+      const { page, limit, isRead } = req.query;
+
+      const result = await notificationService.getAll({
+        userId: req.user._id,
+        page,
+        limit,
+        isRead,
+      });
 
       res.status(200).json({
-        success:     true,
-        data:        result.notifications,
-        unreadCount: result.unreadCount,
-        pagination:  result.pagination,
+        success: true,
+        data:       result.notifications,
+        pagination: result.pagination,
       });
     } catch (error) {
       next(error);
     }
   },
 
-  // PUT /api/notifications/:id/read
-  markAsRead: async (req, res, next) => {
+  // PUT /api/notifications/:id/read — single notification read mark karo
+  markRead: async (req, res, next) => {
     try {
-      const notification = await notificationService.markAsRead(
+      const notification = await notificationService.markRead(
         req.params.id,
         req.user._id
       );
@@ -32,32 +35,31 @@ const notificationController = {
       res.status(200).json({
         success: true,
         message: "Notification marked as read",
-        data:    notification,
+        data: notification,
       });
     } catch (error) {
       next(error);
     }
   },
 
-  // PUT /api/notifications/read-all
-  markAllAsRead: async (req, res, next) => {
+  // PUT /api/notifications/read-all — saari notifications read mark karo
+  markAllRead: async (req, res, next) => {
     try {
-      const result = await notificationService.markAllAsRead(req.user._id);
+      await notificationService.markAllRead(req.user._id);
 
       res.status(200).json({
-        success:      true,
-        message:      "All notifications marked as read",
-        updatedCount: result.updatedCount,
+        success: true,
+        message: "All notifications marked as read",
       });
     } catch (error) {
       next(error);
     }
   },
 
-  // DELETE /api/notifications/:id
-  delete: async (req, res, next) => {
+  // DELETE /api/notifications/:id — single notification delete karo
+  deleteOne: async (req, res, next) => {
     try {
-      const result = await notificationService.delete(
+      const result = await notificationService.deleteOne(
         req.params.id,
         req.user._id
       );
@@ -71,15 +73,14 @@ const notificationController = {
     }
   },
 
-  // DELETE /api/notifications/read
+  // DELETE /api/notifications/read — saari read notifications delete karo
   deleteAllRead: async (req, res, next) => {
     try {
-      const result = await notificationService.deleteAllRead(req.user._id);
+      await notificationService.deleteAllRead(req.user._id);
 
       res.status(200).json({
-        success:      true,
-        message:      "All read notifications deleted",
-        deletedCount: result.deletedCount,
+        success: true,
+        message: "All read notifications deleted",
       });
     } catch (error) {
       next(error);
