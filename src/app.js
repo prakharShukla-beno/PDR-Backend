@@ -15,6 +15,7 @@ import "./modules/interaction/interaction.model.js";
 import "./modules/enrichment/enrichment.model.js";
 import "./modules/notification/notification.model.js";
 import "./modules/duplicate/duplicate.model.js";
+import "./modules/icp/icp.model.js";
 
 const app = express();
 

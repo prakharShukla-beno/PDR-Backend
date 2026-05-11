@@ -7,6 +7,9 @@ import campaignRoutes      from "../modules/campaign/campaign.routes.js";
 import enrichmentRoutes    from "../modules/enrichment/enrichment.routes.js";
 import notificationRoutes  from "../modules/notification/notification.routes.js";
 import duplicateRoutes     from "../modules/duplicate/duplicate.routes.js";
+import interactionRoutes   from "../modules/interaction/interaction.routes.js";
+import dashboardRoutes     from "../modules/dashboard/dashboard.routes.js";
+import icpRoutes           from "../modules/icp/icp.routes.js";
 
 const router = Router();
 
@@ -18,5 +21,8 @@ router.use("/campaigns",      campaignRoutes);
 router.use("/enrichment",     enrichmentRoutes);
 router.use("/notifications",  notificationRoutes);
 router.use("/duplicates",     duplicateRoutes);
+router.use("/interactions",   interactionRoutes);
+router.use("/dashboard",      dashboardRoutes);
+router.use("/icp",            icpRoutes);
 
 export default router;
