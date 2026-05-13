@@ -5,18 +5,15 @@ const notificationController = {
   // GET /api/notifications — user ki saari notifications
   getAll: async (req, res, next) => {
     try {
-      const { page, limit, isRead } = req.query;
-
-      const result = await notificationService.getAll({
-        userId: req.user._id,
-        page,
-        limit,
-        isRead,
-      });
+      const result = await notificationService.getAll(
+        req.user._id,
+        req.query
+      );
 
       res.status(200).json({
         success: true,
-        data:       result.notifications,
+        data: result.notifications,
+        unreadCount: result.unreadCount,
         pagination: result.pagination,
       });
     } catch (error) {
@@ -45,7 +42,7 @@ const notificationController = {
   // PUT /api/notifications/read-all — saari notifications read mark karo
   markAllRead: async (req, res, next) => {
     try {
-      await notificationService.markAllRead(req.user._id);
+      await notificationService.markAllAsRead(req.user._id);
 
       res.status(200).json({
         success: true,
@@ -59,7 +56,7 @@ const notificationController = {
   // DELETE /api/notifications/:id — single notification delete karo
   deleteOne: async (req, res, next) => {
     try {
-      const result = await notificationService.deleteOne(
+      const result = await notificationService.delete(
         req.params.id,
         req.user._id
       );
