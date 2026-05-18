@@ -17,7 +17,11 @@ const icpValidation = [
     .optional()
     .isArray().withMessage("industries must be an array")
     .custom((arr) => {
-      const valid = ["BFSI", "IT & ITES", "Media & Telecom", "Retail & CPG", "Healthcare"];
+      const valid = [
+        "BFSI", "IT & ITES", "SaaS", "Fintech", "E-commerce",
+        "Healthcare", "EdTech", "Logistics", "Manufacturing",
+        "Retail & CPG", "Media & Telecom", "Real Estate",
+      ];
       return arr.every((v) => valid.includes(v));
     }).withMessage("Invalid industry value"),
 

@@ -35,7 +35,11 @@ const prospectSchema = new mongoose.Schema(
     },
     primaryIndustry: {
       type: String,
-      enum: ["BFSI", "IT & ITES", "Media & Telecom", "Retail & CPG", "Healthcare", null],
+      enum: [
+        "BFSI", "IT & ITES", "SaaS", "Fintech", "E-commerce",
+        "Healthcare", "EdTech", "Logistics", "Manufacturing",
+        "Retail & CPG", "Media & Telecom", "Real Estate", null
+      ],
       default: null,
     },
     commercialCategory: {
@@ -45,7 +49,7 @@ const prospectSchema = new mongoose.Schema(
     },
     businessModel: {
       type: String,
-      enum: ["B2B", "B2C", "D2C", "E-Commerce", null],
+      enum: ["B2B", "B2C", "D2C", "E-Commerce", "B2B2C", "Marketplace", null],
       default: null,
     },
     country: {
@@ -66,6 +70,7 @@ const prospectSchema = new mongoose.Schema(
         "Scale-Up $10M-$50M",
         "Mid-Market $50M-$250M",
         "Corporate $250M-$1B",
+        "Enterprise $1B+",
         null,
       ],
       default: null,
@@ -187,16 +192,16 @@ const prospectSchema = new mongoose.Schema(
     source: {
       type: String,
       required: [true, "Source is required"],
-      enum: ["excel", "apollo", "zoominfo"],
+      enum: ["excel", "apollo", "zoominfo", "manual"],
       default: "excel",
     },
   },
   {
-    timestamps: true, // createdAt, updatedAt auto
+    timestamps: true,
   }
 );
 
-// ─── Indexes — FRD: search & filter within 2 seconds ──────────────────────────
+// ─── Indexes ───────────────────────────────────────────────────────────────────
 prospectSchema.index({ accountName: "text", website: "text" });
 prospectSchema.index({ accountName: 1 });
 prospectSchema.index({ website: 1 });

@@ -75,10 +75,14 @@ const FIELD_MAP = {
 // Valid enum values from schema — for validation
 const ENUM_FIELDS = {
   accountSource:        ["LinkedIn", "Google", "Social Media", "Referral", "Event", "Cold Outreach"],
-  primaryIndustry:      ["BFSI", "IT & ITES", "Media & Telecom", "Retail & CPG", "Healthcare"],
+  primaryIndustry:      [
+    "BFSI", "IT & ITES", "SaaS", "Fintech", "E-commerce",
+    "Healthcare", "EdTech", "Logistics", "Manufacturing",
+    "Retail & CPG", "Media & Telecom", "Real Estate",
+  ],
   commercialCategory:   ["Product Led", "SaaS-Subscriptions", "Professional Services", "Retail-E-Com"],
-  businessModel:        ["B2B", "B2C", "D2C", "E-Commerce"],
-  annualRevenue:        ["Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M", "Mid-Market $50M-$250M", "Corporate $250M-$1B"],
+  businessModel:        ["B2B", "B2C", "D2C", "E-Commerce", "B2B2C", "Marketplace"],
+  annualRevenue:        ["Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M", "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+"],
   noOfEmployees:        ["1-50", "51-200", "201-1,000", "1,001-5,000", "5,000+"],
   primaryTechStack:     ["Cloud Native", "Legacy On-Prem", "Hybrid Cloud", "GenAI & LLM", "Low-Code/No-Code"],
   techAdoptionProfile:  ["Innovator", "Early Adopter", "Mainstream", "Laggard", "Leapfrog"],

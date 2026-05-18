@@ -24,7 +24,7 @@ const importLogSchema = new mongoose.Schema(
     status: {
       type: String,
       required: true,
-      enum: ["completed", "partial", "failed"],
+      enum: ["processing", "completed", "partial", "failed"],
       default: "completed",
     },
   },

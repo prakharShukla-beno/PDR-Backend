@@ -17,15 +17,18 @@ const icpSchema = new mongoose.Schema(
       required: true,
     },
 
-    // ── ICP Matching Criteria ─────────────────────────────────────────────────
     industries: {
       type: [String],
-      enum: ["BFSI", "IT & ITES", "Media & Telecom", "Retail & CPG", "Healthcare"],
+      enum: [
+        "BFSI", "IT & ITES", "SaaS", "Fintech", "E-commerce",
+        "Healthcare", "EdTech", "Logistics", "Manufacturing",
+        "Retail & CPG", "Media & Telecom", "Real Estate",
+      ],
       default: [],
     },
     businessModels: {
       type: [String],
-      enum: ["B2B", "B2C", "D2C", "E-Commerce"],
+      enum: ["B2B", "B2C", "B2B2C", "D2C", "E-Commerce", "Marketplace"],
       default: [],
     },
     countries: {
@@ -35,17 +38,14 @@ const icpSchema = new mongoose.Schema(
     annualRevenues: {
       type: [String],
       enum: [
-        "Seed <$1M",
-        "Early $1M-$10M",
-        "Scale-Up $10M-$50M",
-        "Mid-Market $50M-$250M",
-        "Corporate $250M-$1B",
+        "Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M",
+        "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+",
       ],
       default: [],
     },
     employeeRanges: {
       type: [String],
-      enum: ["1-50", "51-200", "201-1,000", "1,001-5,000", "5,000+"],
+      enum: ["1-50", "51-200", "201-500", "501-1,000", "1,001-5,000", "5,000+"],
       default: [],
     },
     minTechFitScore: {
@@ -57,19 +57,17 @@ const icpSchema = new mongoose.Schema(
     intentSignals: {
       type: [String],
       enum: [
-        "Hyper-Growth Mode",
-        "Cost Containment",
-        "Risk Mitigation",
-        "Modernization Mandate",
+        "Hyper-Growth Mode", "Cost Containment", "Risk Mitigation",
+        "Modernization Mandate", "Hiring for Data role",
+        "Capital Event", "Strategic Pivot", "Regulatory Action",
       ],
       default: [],
     },
 
-    // ── Buyer Persona ─────────────────────────────────────────────────────────
     buyerPersona: {
       targetSeniorities: {
         type: [String],
-        enum: ["C-Suite", "VP", "Director", "Manager", "Individual Contributor"],
+        enum: ["C-Suite", "VP", "Director", "Manager", "Senior IC"],
         default: [],
       },
       targetDepartments: {
@@ -87,9 +85,7 @@ const icpSchema = new mongoose.Schema(
       default: true,
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
 const ICP = mongoose.model("ICP", icpSchema);

@@ -39,7 +39,7 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }, // Max 10MB
+  limits: { fileSize: 50 * 1024 * 1024 }, // 10MB → 50MB
 });
 
 const router = Router();
@@ -48,6 +48,6 @@ const router = Router();
 router.use(authMiddleware);
 
 // POST /api/import/excel
-router.post("/excel", upload.single("file"), importController.uploadExcel);
+router.post("/excel", upload.single("file"), importController.uploadExcel);router.get("/status/:importLogId", importController.getStatus);
 
 export default router;

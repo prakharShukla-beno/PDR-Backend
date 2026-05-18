@@ -7,6 +7,14 @@ const prospectRepository = {
     return await Prospect.create(data);
   },
 
+  // Bulk insert — 1000-1000 rows ke chunks ke liye
+  insertMany: async (rows) => {
+    return await Prospect.insertMany(rows, {
+      ordered: false,  // ek row fail ho toh baki insert hote rahe
+      rawResult: true, // result mein insertedCount milega
+    });
+  },
+
   // Get all prospects with pagination and filters
   findAll: async ({ filter = {}, page = 1, limit = 10, sort = { createdAt: -1 } }) => {
     const skip = (page - 1) * limit;

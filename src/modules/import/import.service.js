@@ -5,11 +5,19 @@ import duplicateRepository from "../duplicate/duplicate.repository.js";
 import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
 
+const CHUNK_SIZE = 1000;
+
 const importService = {
 
   processExcelImport: async (filePath, userId) => {
 
     const { validRows, errorDetails, totalRows } = processExcelFile(filePath);
+
+    // Debug — kitni rows valid hain
+    console.log(`📊 Total rows: ${totalRows}, Valid: ${validRows.length}, Errors: ${errorDetails.length}`);
+    if (errorDetails.length > 0) {
+      console.log("❌ First 5 validation errors:", errorDetails.slice(0, 5));
+    }
 
     const importLog = await importLogRepository.create({
       fileName:     filePath.split(/[\\/]/).pop(),
@@ -25,55 +33,101 @@ const importService = {
     let successCount = 0;
     const insertErrors = [];
 
+    const accountNames = validRows.map(r => r.accountName).filter(Boolean);
+    const websites     = validRows.map(r => r.website).filter(Boolean);
+
+    const existingProspects = await prospectRepository.findAll({
+      filter: {
+        $or: [
+          { accountName: { $in: accountNames } },
+          { website:     { $in: websites } },
+        ],
+      },
+      page:  1,
+      limit: 999999,
+    });
+
+    const existingNames    = new Set(existingProspects.prospects.map(p => p.accountName?.toLowerCase()));
+    const existingWebsites = new Set(existingProspects.prospects.map(p => p.website?.toLowerCase()));
+
+    const preparedRows  = [];
+    const duplicateRows = [];
+
     for (const row of validRows) {
+      const isDuplicate =
+        (row.accountName && existingNames.has(row.accountName.toLowerCase())) ||
+        (row.website     && existingWebsites.has(row.website.toLowerCase()));
+
+      preparedRows.push({
+        ...row,
+        isDuplicate,
+        source:      "excel",
+        importLogId: importLog._id,
+      });
+
+      if (isDuplicate) duplicateRows.push(row);
+    }
+
+    console.log(`📦 Prepared rows: ${preparedRows.length}, Duplicates: ${duplicateRows.length}`);
+
+    // Chunked insertMany
+    for (let i = 0; i < preparedRows.length; i += CHUNK_SIZE) {
+      const chunk = preparedRows.slice(i, i + CHUNK_SIZE);
+      const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
+
       try {
-        const existingDuplicates = await prospectRepository.findDuplicates({
-          accountName: row.accountName,
-          website:     row.website,
+        const result = await prospectRepository.insertMany(chunk);
+        const inserted = result.insertedCount ?? chunk.length;
+        successCount += inserted;
+        console.log(`✅ Chunk ${chunkNum}: ${inserted} rows inserted`);
+      } catch (err) {
+        // Debug — exact MongoDB error
+        console.error(`❌ Chunk ${chunkNum} error:`, err.message);
+        if (err.writeErrors?.length > 0) {
+          console.error("First write error:", JSON.stringify(err.writeErrors[0].err, null, 2));
+        }
+        if (err.result?.insertedCount) {
+          successCount += err.result.insertedCount;
+          console.log(`⚠️ Chunk ${chunkNum}: partial — ${err.result.insertedCount} inserted`);
+        }
+        insertErrors.push(`Chunk ${chunkNum} fail: ${err.message}`);
+      }
+
+      await importLogRepository.update(importLog._id, { successCount });
+    }
+
+    // Duplicate records log
+    for (const row of duplicateRows) {
+      try {
+        const existing = existingProspects.prospects.find(
+          p => p.accountName?.toLowerCase() === row.accountName?.toLowerCase() ||
+               p.website?.toLowerCase()     === row.website?.toLowerCase()
+        );
+        const inserted = await prospectRepository.findAll({
+          filter: { accountName: row.accountName, source: "excel" },
+          page: 1, limit: 1,
         });
 
-        const isDuplicate = existingDuplicates.length > 0;
-
-        const prospect = await prospectRepository.create({
-          ...row,
-          isDuplicate,
-          source:      "excel",
-          importLogId: importLog._id,
-        });
-
-        if (isDuplicate) {
+        if (existing && inserted.prospects[0]) {
           const matchFields = [];
           if (row.accountName) matchFields.push("accountName");
           if (row.website)     matchFields.push("website");
 
           await duplicateRepository.create({
-            prospectId1: existingDuplicates[0]._id,
-            prospectId2: prospect._id,
+            prospectId1: existing._id,
+            prospectId2: inserted.prospects[0]._id,
             matchFields,
             status:      "pending",
           });
-
-          // Duplicate detect hone pe notification
-          await notificationService.create({
-            userId:        userId,
-            type:          "dedup_complete",
-            message:       `Duplicate detected for "${row.accountName}" during import`,
-            refId:         prospect._id,
-            refCollection: "prospects",
-          });
         }
-
-        successCount++;
       } catch (err) {
-        insertErrors.push(
-          `Insert failed for row: ${row.accountName} — ${err.message}`
-        );
+        insertErrors.push(`Duplicate log failed for: ${row.accountName}`);
       }
     }
 
     const finalStatus =
-      successCount === 0          ? "failed"    :
-      successCount < validRows.length ? "partial" :
+      successCount === 0               ? "failed"  :
+      successCount < validRows.length  ? "partial" :
       "completed";
 
     await importLogRepository.update(importLog._id, {
@@ -85,14 +139,15 @@ const importService = {
 
     fs.unlinkSync(filePath);
 
-    // Import complete hone pe notification
     await notificationService.create({
-      userId:        userId,
+      userId,
       type:          "import_complete",
       message:       `Import ${finalStatus} — ${successCount} of ${totalRows} rows imported successfully`,
       refId:         importLog._id,
       refCollection: "importLogs",
     });
+
+    console.log(`🏁 Import done — ${successCount} of ${totalRows} rows`);
 
     return {
       importLogId:  importLog._id,
@@ -102,6 +157,10 @@ const importService = {
       errorDetails: [...errorDetails, ...insertErrors],
       status:       finalStatus,
     };
+  },
+
+  getImportStatus: async (importLogId) => {
+    return await importLogRepository.findById(importLogId);
   },
 };
 
