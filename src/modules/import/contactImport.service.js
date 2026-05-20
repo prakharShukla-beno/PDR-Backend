@@ -35,50 +35,50 @@ const contactImportService = {
       validRows.map(r => r.accountName?.toLowerCase()).filter(Boolean)
     )];
 
-    // ── Step 2: DB mein dhundo matching accounts ───────────────────────────────
+    // ── Step 2: DB mein matching accounts dhundo ek hi query mein ─────────────
     const { prospects: existingAccounts } = await prospectRepository.findAll({
       filter: {
         accountName: {
           $in: uniqueAccountNames.map(n => new RegExp(`^${n}$`, "i")),
         },
       },
-      page: 1,
+      page:  1,
       limit: 999999,
     });
 
-    // accountName → accountId map banao
+    // accountName (lowercase) → accountId map banao
     const accountMap = {};
     for (const account of existingAccounts) {
       accountMap[account.accountName.toLowerCase()] = account._id;
     }
 
-    // ── Step 3: Rows prepare karo ──────────────────────────────────────────────
-    const preparedRows  = [];
-    const skippedRows   = [];
+    // ── Step 3: Apollo style — rows prepare karo ──────────────────────────────
+    // Contact skip nahi hoga agar account nahi mila
+    // accountId = null rahega — baad mein link ho sakta hai
+    const preparedRows = [];
+    let linkedCount   = 0;
+    let unlinkedCount = 0;
 
     for (const row of validRows) {
       const accountKey = row.accountName?.toLowerCase();
-      const accountId  = accountMap[accountKey];
-
-      if (!accountId) {
-        // Account nahi mila — skip karo, error log karo
-        skippedRows.push(`Account "${row.accountName}" nahi mila — pehle account import karo`);
-        continue;
-      }
-
-      const { accountName, ...contactData } = row; // accountName field hatao
+      const accountId  = accountMap[accountKey] || null; // null — skip nahi karo
 
       preparedRows.push({
-        ...contactData,
-        accountId,
+        ...row,
+        accountName: row.accountName || null, // reference ke liye store karo
+        accountId,                            // null bhi ho sakta hai
+        isLinked:    !!accountId,             // true agar account mila
         source:      filePath.toLowerCase().endsWith(".csv") ? "csv" : "excel",
         importLogId: importLog._id,
       });
+
+      if (accountId) linkedCount++;
+      else           unlinkedCount++;
     }
 
-    console.log(`📦 Prepared: ${preparedRows.length}, Skipped (no account): ${skippedRows.length}`);
+    console.log(`📦 Prepared: ${preparedRows.length} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
 
-    // ── Step 4: Chunked insert ─────────────────────────────────────────────────
+    // ── Step 4: Chunked insertMany ─────────────────────────────────────────────
     let successCount = 0;
     const insertErrors = [];
 
@@ -87,9 +87,9 @@ const contactImportService = {
       const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
 
       try {
-        const result  = await contactRepository.insertMany(chunk);
+        const result   = await contactRepository.insertMany(chunk);
         const inserted = result.insertedCount ?? chunk.length;
-        successCount += inserted;
+        successCount  += inserted;
         console.log(`✅ Chunk ${chunkNum}: ${inserted} contacts inserted`);
       } catch (err) {
         console.error(`❌ Chunk ${chunkNum} error:`, err.message);
@@ -99,14 +99,15 @@ const contactImportService = {
         insertErrors.push(`Chunk ${chunkNum} fail: ${err.message}`);
       }
 
+      // Progress update karo har chunk ke baad
       await importLogRepository.update(importLog._id, { successCount });
     }
 
-    // ── Step 5: Final status ───────────────────────────────────────────────────
-    const allErrors  = [...errorDetails, ...skippedRows, ...insertErrors];
+    // ── Step 5: Final status update ───────────────────────────────────────────
+    const allErrors   = [...errorDetails, ...insertErrors];
     const finalStatus =
-      successCount === 0              ? "failed"    :
-      successCount < validRows.length ? "partial"   :
+      successCount === 0               ? "failed"    :
+      successCount < validRows.length  ? "partial"   :
       "completed";
 
     await importLogRepository.update(importLog._id, {
@@ -116,28 +117,29 @@ const contactImportService = {
       status:       finalStatus,
     });
 
-    // File delete karo
+    // File disk se delete karo
     fs.unlinkSync(filePath);
 
     // Notification bhejo
     await notificationService.create({
       userId,
       type:          "import_complete",
-      message:       `Contact import ${finalStatus} — ${successCount} of ${totalRows} contacts imported successfully`,
+      message:       `Contact import ${finalStatus} — ${successCount} of ${totalRows} imported. Linked: ${linkedCount}, Unlinked: ${unlinkedCount}`,
       refId:         importLog._id,
       refCollection: "importLogs",
     });
 
-    console.log(`🏁 Contact import done — ${successCount} of ${totalRows}`);
+    console.log(`🏁 Contact import done — ${successCount}/${totalRows} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
 
     return {
-      importLogId:  importLog._id,
+      importLogId:   importLog._id,
       totalRows,
       successCount,
-      failedCount:  allErrors.length,
-      skippedCount: skippedRows.length,
-      errorDetails: allErrors,
-      status:       finalStatus,
+      failedCount:   allErrors.length,
+      linkedCount,
+      unlinkedCount,
+      errorDetails:  allErrors,
+      status:        finalStatus,
     };
   },
 };
