@@ -10,19 +10,22 @@ import duplicateRoutes     from "../modules/duplicate/duplicate.routes.js";
 import interactionRoutes   from "../modules/interaction/interaction.routes.js";
 import dashboardRoutes     from "../modules/dashboard/dashboard.routes.js";
 import icpRoutes           from "../modules/icp/icp.routes.js";
+import auditLogRoutes      from "../modules/auditLog/auditLog.routes.js";
 
 const router = Router();
 
-router.use("/auth",           authRoutes);
-router.use("/prospects",      prospectRoutes);
-router.use("/import",         importRoutes);
-router.use("/search",         searchRoutes);
-router.use("/campaigns",      campaignRoutes);
-router.use("/enrichment",     enrichmentRoutes);
-router.use("/notifications",  notificationRoutes);
-router.use("/duplicates",     duplicateRoutes);
-router.use("/interactions",   interactionRoutes);
-router.use("/dashboard",      dashboardRoutes);
-router.use("/icp",            icpRoutes);
+router.use("/auth",         authRoutes);
+router.use("/prospects",    prospectRoutes);
+router.use("/import",       importRoutes);
+router.use("/search",       searchRoutes);
+router.use("/campaigns",    campaignRoutes);
+router.use("/enrichment",   enrichmentRoutes);
+router.use("/notifications",notificationRoutes);
+router.use("/duplicates",   duplicateRoutes);
+router.use("/interactions", interactionRoutes);
+router.use("/dashboard",    dashboardRoutes);
+router.use("/icp",          icpRoutes);
+
+router.use("/audit-logs",   auditLogRoutes);
 
 export default router;

@@ -144,6 +144,21 @@ const campaignService = {
 
     return updated;
   },
+
+  // Stats update karo
+  updateStats: async (id, stats) => {
+    const updateData = {};
+    if (stats.sentCount   !== undefined) updateData["stats.sentCount"]   = stats.sentCount;
+    if (stats.openCount   !== undefined) updateData["stats.openCount"]   = stats.openCount;
+    if (stats.clickCount  !== undefined) updateData["stats.clickCount"]  = stats.clickCount;
+    if (stats.replyCount  !== undefined) updateData["stats.replyCount"]  = stats.replyCount;
+    if (stats.conversions !== undefined) updateData["stats.conversions"] = stats.conversions;
+    return await Campaign.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true }
+    );
+  },
 };
 
 export default campaignService;

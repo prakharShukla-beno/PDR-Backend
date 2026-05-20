@@ -13,7 +13,10 @@ const contactSchema = new mongoose.Schema(
     },
     email:     { type: String, trim: true, lowercase: true, default: null },
     phone:     { type: String, trim: true, default: null },
+    phone2:    { type: String, trim: true, default: null },  // ← client: Phone 2
     linkedIn:  { type: String, trim: true, default: null },
+    job1:      { type: String, trim: true, default: null },  // ← client: Job1
+    job2:      { type: String, trim: true, default: null },  // ← client: Job2
     isPrimary: { type: Boolean, default: false },
   },
   { _id: true }
@@ -65,13 +68,8 @@ const prospectSchema = new mongoose.Schema(
     annualRevenue: {
       type: String,
       enum: [
-        "Seed <$1M",
-        "Early $1M-$10M",
-        "Scale-Up $10M-$50M",
-        "Mid-Market $50M-$250M",
-        "Corporate $250M-$1B",
-        "Enterprise $1B+",
-        null,
+        "Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M",
+        "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+", null,
       ],
       default: null,
     },
@@ -80,9 +78,21 @@ const prospectSchema = new mongoose.Schema(
       enum: ["1-50", "51-200", "201-1,000", "1,001-5,000", "5,000+", null],
       default: null,
     },
+
+    // ── Tech Stack ─────────────────────────────────────────────────────────────
     primaryTechStack: {
       type: String,
-      enum: ["Cloud Native", "Legacy On-Prem", "Hybrid Cloud", "GenAI & LLM", "Low-Code/No-Code", null],
+      trim: true,  // free text — client file mein koi bhi value ho sakti hai
+      default: null,
+    },
+    secondaryTechStack: {
+      type: String,
+      trim: true,  // ← client: Tech2
+      default: null,
+    },
+    tertiaryTechStack: {
+      type: String,
+      trim: true,  // ← client: Tech3
       default: null,
     },
     techAdoptionProfile: {
@@ -99,6 +109,18 @@ const prospectSchema = new mongoose.Schema(
       type: String,
       trim: true,
       lowercase: true,
+      default: null,
+    },
+
+    // ── Client Specific Fields ─────────────────────────────────────────────────
+    campaignName: {
+      type: String,
+      trim: true,   // ← client: Campaign column
+      default: null,
+    },
+    comments: {
+      type: String,
+      trim: true,   // ← client: Comments column
       default: null,
     },
 
@@ -175,16 +197,10 @@ const prospectSchema = new mongoose.Schema(
       default: null,
     },
     campaignIds: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Campaign",
-      },
+      { type: mongoose.Schema.Types.ObjectId, ref: "Campaign" },
     ],
     interactionIds: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Interaction",
-      },
+      { type: mongoose.Schema.Types.ObjectId, ref: "Interaction" },
     ],
 
     // ── System & Control ───────────────────────────────────────────────────────
@@ -196,9 +212,7 @@ const prospectSchema = new mongoose.Schema(
       default: "excel",
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
 // ─── Indexes ───────────────────────────────────────────────────────────────────
@@ -210,6 +224,7 @@ prospectSchema.index({ primaryIndustry: 1 });
 prospectSchema.index({ country: 1 });
 prospectSchema.index({ salesPriority: 1 });
 prospectSchema.index({ assignedTo: 1 });
+prospectSchema.index({ campaignName: 1 });
 
 const Prospect = mongoose.model("Prospect", prospectSchema);
 export default Prospect;
