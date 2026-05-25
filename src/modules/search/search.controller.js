@@ -6,10 +6,23 @@ const searchController = {
   searchProspects: async (req, res, next) => {
     try {
       const result = await searchService.searchProspects(req.query);
-
       res.status(200).json({
-        success: true,
+        success:    true,
         data:       result.prospects,
+        pagination: result.pagination,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // GET /api/search/contacts
+  searchContacts: async (req, res, next) => {
+    try {
+      const result = await searchService.searchContacts(req.query);
+      res.status(200).json({
+        success:    true,
+        data:       result.contacts,
         pagination: result.pagination,
       });
     } catch (error) {
@@ -21,10 +34,9 @@ const searchController = {
   getFilterOptions: async (req, res, next) => {
     try {
       const options = await searchService.getFilterOptions();
-
       res.status(200).json({
         success: true,
-        data: options,
+        data:    options,
       });
     } catch (error) {
       next(error);

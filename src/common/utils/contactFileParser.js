@@ -4,7 +4,8 @@ import { parse } from "csv-parse/sync";
 
 const { readFile, utils } = pkg;
 
-// ── Column mapping — Excel/CSV header → schema field ─────────────────────────
+// ── Column mapping ─────────────────────────────────────────────────────────────
+// Jitne bhi possible column names ho sakte hain — sab cover kiye hain
 const CONTACT_FIELD_MAP = {
   // Account link
   "account_name":              "accountName",
@@ -12,69 +13,116 @@ const CONTACT_FIELD_MAP = {
   "accountname":               "accountName",
   "company":                   "accountName",
   "company name":              "accountName",
+  "companyname":               "accountName",
+  "organization":              "accountName",
+  "org":                       "accountName",
 
   // Name
   "first_name":                "firstName",
   "first name":                "firstName",
   "firstname":                 "firstName",
+  "fname":                     "firstName",
   "last_name":                 "lastName",
   "last name":                 "lastName",
   "lastname":                  "lastName",
+  "lname":                     "lastName",
+  "name":                      "firstName",   // single name field → firstName mein
+  "full name":                 "firstName",
+  "full_name":                 "firstName",
+  "contact name":              "firstName",
+  "contact_name":              "firstName",
 
   // Role
-  "functional_domain":         "functionalDomain",
-  "functional domain":         "functionalDomain",
-  "functionaldomain":          "functionalDomain",
-  "key_focus_areas":           "keyFocusAreas",
-  "key focus areas":           "keyFocusAreas",
-  "keyfocusareas":             "keyFocusAreas",
+  "title":                     "standardizedRoles",
+  "job title":                 "standardizedRoles",
+  "job_title":                 "standardizedRoles",
+  "jobtitle":                  "standardizedRoles",
+  "role":                      "standardizedRoles",
+  "designation":               "standardizedRoles",
+  "position":                  "standardizedRoles",
   "standardized_roles":        "standardizedRoles",
   "standardized roles":        "standardizedRoles",
   "standardizedroles":         "standardizedRoles",
-  "role":                      "standardizedRoles",
-  "designation":               "standardizedRoles",
+  "functional_domain":         "functionalDomain",
+  "functional domain":         "functionalDomain",
+  "functionaldomain":          "functionalDomain",
+  "department":                "functionalDomain",
+  "function":                  "functionalDomain",
+  "key_focus_areas":           "keyFocusAreas",
+  "key focus areas":           "keyFocusAreas",
+  "keyfocusareas":             "keyFocusAreas",
+  "focus areas":               "keyFocusAreas",
 
   // Email
   "email":                     "email",
+  "email address":             "email",
+  "email_address":             "email",
+  "emailaddress":              "email",
+  "work email":                "email",
+  "work_email":                "email",
   "contact_email":             "email",
   "contact email":             "email",
   "secondary_email":           "secondaryEmail",
   "secondary email":           "secondaryEmail",
   "secondaryemail":            "secondaryEmail",
+  "email 2":                   "secondaryEmail",
+  "email2":                    "secondaryEmail",
 
   // Phone
+  "phone":                     "primaryPhone",
+  "phone number":              "primaryPhone",
+  "phone_number":              "primaryPhone",
+  "phonenumber":               "primaryPhone",
   "primary_phone":             "primaryPhone",
   "primary phone":             "primaryPhone",
   "primaryphone":              "primaryPhone",
-  "phone":                     "primaryPhone",
+  "work phone":                "primaryPhone",
+  "direct phone":              "primaryPhone",
+  "phone 1":                   "primaryPhone",
+  "phone1":                    "primaryPhone",
   "secondary_phone":           "secondaryPhone",
   "secondary phone":           "secondaryPhone",
   "secondaryphone":            "secondaryPhone",
+  "phone 2":                   "secondaryPhone",
+  "phone2":                    "secondaryPhone",
   "primary_mob_no":            "primaryMobNo",
   "primary mob no":            "primaryMobNo",
   "primarymobno":              "primaryMobNo",
   "mobile":                    "primaryMobNo",
+  "mobile number":             "primaryMobNo",
+  "mobile_number":             "primaryMobNo",
+  "cell":                      "primaryMobNo",
+  "cell phone":                "primaryMobNo",
   "primary_phone_extension":   "primaryPhoneExtension",
   "primary phone extension":   "primaryPhoneExtension",
   "primaryphoneextension":     "primaryPhoneExtension",
+  "ext":                       "primaryPhoneExtension",
+  "extension":                 "primaryPhoneExtension",
   "secondary_phone_extension": "secondaryPhoneExtension",
   "secondary phone extension": "secondaryPhoneExtension",
   "secondaryphoneextension":   "secondaryPhoneExtension",
 
   // Social
+  "linkedin":                  "linkedIn",
+  "linkedin url":              "linkedIn",
+  "linkedin_url":              "linkedIn",
   "contact_linkedin":          "linkedIn",
   "contact linkedin":          "linkedIn",
   "contactlinkedin":           "linkedIn",
-  "linkedin":                  "linkedIn",
+  "linkedin profile":          "linkedIn",
+  "twitter":                   "twitterUrl",
+  "twitter url":               "twitterUrl",
+  "twitter_url":               "twitterUrl",
   "contact_twitter_url":       "twitterUrl",
   "contact twitter url":       "twitterUrl",
   "contacttwitterurl":         "twitterUrl",
-  "twitter":                   "twitterUrl",
 
   // Location
   "country":                   "country",
   "state":                     "state",
+  "province":                  "state",
   "city":                      "city",
+  "location":                  "city",
   "time_zone":                 "timeZone",
   "time zone":                 "timeZone",
   "timezone":                  "timeZone",
@@ -96,33 +144,34 @@ const FUNCTIONAL_DOMAINS = [
   "Public Sector & NGO",
 ];
 
-const normalizeHeader = (h) => String(h).toLowerCase().trim().replace(/\*/g, "").trim();
+const normalizeHeader = (h) =>
+  String(h).toLowerCase().trim().replace(/\*/g, "").replace(/\s+/g, " ").trim();
 
-// ── Parse Excel file → raw rows ───────────────────────────────────────────────
+// ── Parse Excel ───────────────────────────────────────────────────────────────
 const parseExcelFile = (filePath) => {
-  const workbook = readFile(filePath);
+  const workbook  = readFile(filePath);
   const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
+  const sheet     = workbook.Sheets[sheetName];
   return utils.sheet_to_json(sheet, { defval: null, raw: false });
 };
 
-// ── Parse CSV file → raw rows ─────────────────────────────────────────────────
+// ── Parse CSV ─────────────────────────────────────────────────────────────────
 const parseCsvFile = (filePath) => {
   const fileContent = fs.readFileSync(filePath, "utf-8");
   return parse(fileContent, {
-    columns: true,         // first row = headers
+    columns:          true,
     skip_empty_lines: true,
-    trim: true,
+    trim:             true,
   });
 };
 
-// ── Map one raw row → contact schema fields ────────────────────────────────────
+// ── Map raw row → contact fields ──────────────────────────────────────────────
 const mapRowToContact = (rawRow) => {
   const mapped = {};
 
   for (const [key, value] of Object.entries(rawRow)) {
     const normalizedKey = normalizeHeader(key);
-    const schemaField = CONTACT_FIELD_MAP[normalizedKey];
+    const schemaField   = CONTACT_FIELD_MAP[normalizedKey];
 
     if (!schemaField) continue;
 
@@ -134,53 +183,58 @@ const mapRowToContact = (rawRow) => {
   return mapped;
 };
 
-// ── Validate one mapped row ────────────────────────────────────────────────────
+// ── Validate row ──────────────────────────────────────────────────────────────
+// LOOSE VALIDATION — 1 lakh records ke liye
+// Sirf clearly invalid rows reject karo
 const validateContactRow = (row, rowNumber) => {
   const errors = [];
 
-  // accountName must exist (to link with account)
-  if (!row.accountName) {
-    errors.push(`Row ${rowNumber}: Account_Name is required`);
+  // ── Row bilkul empty hai — skip karo ─────────────────────────────────────
+  const hasAnyData = Object.values(row).some(v => v && String(v).trim());
+  if (!hasAnyData) {
+    errors.push(`Row ${rowNumber}: Empty row`);
+    return errors;
   }
 
-  // At least ek identifier hona chahiye
-  if (!row.email && !row.primaryPhone && !row.primaryMobNo) {
-    errors.push(`Row ${rowNumber}: Email ya Phone mein se koi ek zaroori hai`);
-  }
-
-  // Email format check
+  // ── Email format — sirf agar email field hai aur clearly galat hai ────────
   if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) {
-    errors.push(`Row ${rowNumber}: Email "${row.email}" invalid hai`);
+    // Warning only — reject mat karo, sirf null kar do
+    row.email = null;
   }
 
   if (row.secondaryEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.secondaryEmail)) {
-    errors.push(`Row ${rowNumber}: Secondary Email "${row.secondaryEmail}" invalid hai`);
+    row.secondaryEmail = null;
   }
 
-  // Functional domain enum check
+  // ── FunctionalDomain — agar value hai aur match nahi karti → null karo ────
+  // Reject mat karo — bahut alag-alag formats aate hain real data mein
   if (row.functionalDomain && !FUNCTIONAL_DOMAINS.includes(row.functionalDomain)) {
-    errors.push(`Row ${rowNumber}: Functional Domain "${row.functionalDomain}" invalid hai`);
+    row.functionalDomain = null; // invalid value → null, row save hogi
   }
+
+  // NOTE: accountName aur email/phone REQUIRED nahi hain ab
+  // Real world data mein bahut gaps hote hain — sab save karo
+  // isLinked: false rahega agar accountName nahi mila
 
   return errors;
 };
 
-// ── Main export function ───────────────────────────────────────────────────────
+// ── Main export ───────────────────────────────────────────────────────────────
 export const processContactFile = (filePath) => {
   const isCSV = filePath.toLowerCase().endsWith(".csv");
 
-  // Parse based on file type
   const rawRows = isCSV ? parseCsvFile(filePath) : parseExcelFile(filePath);
 
-  const validRows   = [];
+  const validRows    = [];
   const errorDetails = [];
 
   rawRows.forEach((rawRow, index) => {
-    const rowNumber = index + 2; // Row 1 = header
+    const rowNumber = index + 2;
     const mappedRow = mapRowToContact(rawRow);
     const errors    = validateContactRow(mappedRow, rowNumber);
 
     if (errors.length > 0) {
+      // Sirf completely empty rows reject hongi
       errorDetails.push(...errors);
     } else {
       validRows.push(mappedRow);

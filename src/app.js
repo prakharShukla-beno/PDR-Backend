@@ -6,9 +6,9 @@ import errorMiddleware from "./common/middlewares/error.middleware.js";
 import router from "./routes/index.js";
 
 // ─── Model Imports ─────────────────────────────────────────────────────────────
-
 import "./modules/user/user.model.js";
 import "./modules/prospect/prospect.model.js";
+import "./modules/contacts/contact.model.js";          // ← ADD kiya
 import "./modules/campaign/campaign.model.js";
 import "./modules/importLog/importLog.model.js";
 import "./modules/interaction/interaction.model.js";
