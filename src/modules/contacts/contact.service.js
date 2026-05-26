@@ -1,26 +1,48 @@
 import contactRepository from "./contact.repository.js";
-import Prospect from "../prospect/prospect.model.js";
+import Prospect          from "../prospect/prospect.model.js";
 import campaignRepository from "../campaign/campaign.repository.js";
+
+// Helper — prospect se denormalized fields nikalo
+const extractAccountFields = (prospect) => ({
+  accountIndustry:      prospect.primaryIndustry || null,
+  accountCountry:       prospect.country          || null,
+  accountCity:          prospect.hqLocationCity   || null,
+  accountEmployees:     prospect.noOfEmployees    || null,
+  accountRevenue:       prospect.annualRevenue    || null,
+  accountBusinessModel: prospect.businessModel    || null,
+  accountSalesPriority: prospect.salesPriority    || null,
+  accountClvRanking:    prospect.clvRanking       || null,
+  accountTechFitScore:  prospect.techFitScore     || null,
+  accountIntentSignal:  prospect.intentSignal     || null,
+  accountWebsite:       prospect.website          || null,
+});
 
 const contactService = {
 
   // Create single contact manually
   create: async (data) => {
-    let accountId = data.accountId || null;
-    let isLinked  = false;
+    let accountId     = data.accountId || null;
+    let isLinked      = false;
+    let accountFields = {};
 
-    // accountId diya hai → directly use karo
+    // accountId diya hai → prospect fetch karo
     if (accountId) {
-      isLinked = true;
+      const prospect = await Prospect.findById(accountId).lean();
+      if (prospect) {
+        isLinked      = true;
+        accountFields = extractAccountFields(prospect);
+      }
     }
     // accountName diya hai → DB mein dhundo
     else if (data.accountName) {
-      const account = await Prospect.findOne({
+      const prospect = await Prospect.findOne({
         accountName: { $regex: new RegExp(`^${data.accountName.trim()}$`, "i") },
-      });
-      if (account) {
-        accountId = account._id;
-        isLinked  = true;
+      }).lean();
+
+      if (prospect) {
+        accountId     = prospect._id;
+        isLinked      = true;
+        accountFields = extractAccountFields(prospect);
       }
     }
 
@@ -28,6 +50,7 @@ const contactService = {
       ...data,
       accountId,
       isLinked,
+      ...accountFields,   // accountIndustry, accountCountry etc. set honge
       source: data.source || "manual",
     });
   },
@@ -104,17 +127,6 @@ const contactService = {
     }
     await contactRepository.delete(id);
     return { message: "Contact deleted successfully" };
-  },
-
-  // Unlinked contacts ko account se link karo
-  // Jab account import ho tab call karo
-  linkContactsToAccount: async (accountName, accountId) => {
-    const result = await contactRepository.update(
-      { accountName: { $regex: new RegExp(`^${accountName}$`, "i") }, isLinked: false },
-      { $set: { accountId, isLinked: true } },
-      { multi: true }
-    );
-    return result;
   },
 
   addToCampaign: async (contactId, campaignId) => {

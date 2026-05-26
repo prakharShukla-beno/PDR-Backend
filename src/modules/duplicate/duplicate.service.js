@@ -1,18 +1,18 @@
 import duplicateRepository from "./duplicate.repository.js";
 import prospectRepository from "../prospect/prospect.repository.js";
+import contactRepository from "../contacts/contact.repository.js";
+import auditLogService from "../auditLog/auditLog.service.js"; // ← ADD
 
 const duplicateService = {
 
-  // Saare duplicates fetch karo with optional status filter
-  getAll: async ({ page = 1, limit = 10, status }) => {
+  getAll: async (query) => {
+    const { page = 1, limit = 10, status } = query;
     const filter = {};
-
-    // Status filter — pending / merged / dismissed
     if (status) filter.status = status;
 
     const { duplicates, total } = await duplicateRepository.findAll({
       filter,
-      page: Number(page),
+      page:  Number(page),
       limit: Number(limit),
     });
 
@@ -27,66 +27,69 @@ const duplicateService = {
     };
   },
 
-  // Single duplicate pair fetch karo
   getById: async (id) => {
     const duplicate = await duplicateRepository.findById(id);
-
     if (!duplicate) {
       const error = new Error("Duplicate record not found");
       error.statusCode = 404;
       throw error;
     }
-
     return duplicate;
   },
 
-  // Dismiss — duplicate nahi hai, dono alag prospects hain
+  // ── Dismiss ────────────────────────────────────────────────────────────────
   dismiss: async (id, userId) => {
     const duplicate = await duplicateRepository.findById(id);
-
     if (!duplicate) {
       const error = new Error("Duplicate record not found");
       error.statusCode = 404;
       throw error;
     }
-
     if (duplicate.status !== "pending") {
       const error = new Error(`Cannot dismiss — already ${duplicate.status}`);
       error.statusCode = 400;
       throw error;
     }
 
-    // Status update karo
     const updated = await duplicateRepository.update(id, {
       status:     "dismissed",
       reviewedBy: userId,
       reviewedAt: new Date(),
     });
 
-    // Dono prospects ka isDuplicate flag false karo
     await prospectRepository.update(duplicate.prospectId1._id, { isDuplicate: false });
     await prospectRepository.update(duplicate.prospectId2._id, { isDuplicate: false });
+
+    // ── FR-4.3: Audit log ─────────────────────────────────────────────────
+    await auditLogService.log({
+      userId,
+      action:      "UPDATE",
+      entity:      "Duplicate",
+      entityId:    id,
+      description: `Duplicate dismissed — kept both records`,
+      metadata: {
+        prospectId1: duplicate.prospectId1._id,
+        prospectId2: duplicate.prospectId2._id,
+      },
+    });
 
     return updated;
   },
 
-  // Merge — prospectId2 ko prospectId1 mein merge karo, phir delete karo
+  // ── Merge ──────────────────────────────────────────────────────────────────
   merge: async (id, userId) => {
     const duplicate = await duplicateRepository.findById(id);
-
     if (!duplicate) {
       const error = new Error("Duplicate record not found");
       error.statusCode = 404;
       throw error;
     }
-
     if (duplicate.status !== "pending") {
       const error = new Error(`Cannot merge — already ${duplicate.status}`);
       error.statusCode = 400;
       throw error;
     }
 
-    // prospectId1 = winner (keep), prospectId2 = loser (delete)
     const winner = await prospectRepository.findById(duplicate.prospectId1._id);
     const loser  = await prospectRepository.findById(duplicate.prospectId2._id);
 
@@ -96,41 +99,59 @@ const duplicateService = {
       throw error;
     }
 
-    // Loser ke contacts winner mein merge karo — duplicates skip karo
-    const existingEmails = winner.contacts.map((c) => c.email).filter(Boolean);
-    const newContacts = loser.contacts.filter(
-      (c) => !c.email || !existingEmails.includes(c.email)
+    // ── Loser ke contacts winner mein migrate karo ─────────────────────────
+    // Contact collection se (naya architecture)
+    await contactRepository.updateMany(
+      { accountId: loser._id },
+      {
+        $set: {
+          accountId:   winner._id,
+          accountName: winner.accountName,
+          // Denormalized fields bhi update karo
+          accountIndustry:      winner.primaryIndustry  || null,
+          accountCountry:       winner.country          || null,
+          accountCity:          winner.hqLocationCity   || null,
+          accountEmployees:     winner.noOfEmployees    || null,
+          accountRevenue:       winner.annualRevenue    || null,
+          accountSalesPriority: winner.salesPriority    || null,
+          accountClvRanking:    winner.clvRanking       || null,
+        },
+      }
     );
 
-    if (newContacts.length > 0) {
-      await prospectRepository.update(winner._id, {
-        $push: { contacts: { $each: newContacts } },
-      });
-    }
-
-    // Loser ke campaignIds winner mein add karo
+    // ── Loser ke campaignIds winner mein add karo ──────────────────────────
     if (loser.campaignIds && loser.campaignIds.length > 0) {
       await prospectRepository.update(winner._id, {
         $addToSet: { campaignIds: { $each: loser.campaignIds } },
       });
     }
 
-    // Loser prospect delete karo
+    // ── Loser delete karo ──────────────────────────────────────────────────
     await prospectRepository.delete(loser._id);
 
-    // Winner ka isDuplicate false karo
-    await prospectRepository.update(winner._id, { isDuplicate: false });
-
-    // Duplicate record update karo
+    // ── Duplicate record update karo ───────────────────────────────────────
     const updated = await duplicateRepository.update(id, {
       status:     "merged",
       reviewedBy: userId,
       reviewedAt: new Date(),
     });
 
+    // ── FR-4.3: Audit log ─────────────────────────────────────────────────
+    await auditLogService.log({
+      userId,
+      action:      "DELETE",
+      entity:      "Duplicate",
+      entityId:    id,
+      description: `Duplicate merged — "${loser.accountName}" merged into "${winner.accountName}"`,
+      metadata: {
+        winner:  winner._id,
+        deleted: loser._id,
+      },
+    });
+
     return {
-      duplicate: updated,
-      mergedInto: winner._id,
+      duplicate:       updated,
+      mergedInto:      winner._id,
       deletedProspect: loser._id,
     };
   },

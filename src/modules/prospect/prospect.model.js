@@ -180,15 +180,19 @@ prospectSchema.pre("save", function () {
   }
 });
 
-// ─── Pre-insertMany: bulk insert mein bhi set karo ───────────────────────────
 prospectSchema.pre("insertMany", function (next, docs) {
+  if (!docs || !Array.isArray(docs)) {
+    if (typeof next === "function") next();
+    return;
+  }
   docs.forEach((doc) => {
     if (doc.accountName) {
       doc.accountNameLower = doc.accountName.toLowerCase().trim();
     }
   });
-  next();
+  if (typeof next === "function") next();
 });
+
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 prospectSchema.index({ accountName: "text", website: "text" });

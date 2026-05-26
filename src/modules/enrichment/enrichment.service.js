@@ -1,10 +1,11 @@
 import enrichmentRepository from "./enrichment.repository.js";
 import prospectRepository from "../prospect/prospect.repository.js";
 import notificationService from "../notification/notification.service.js";
+import auditLogService from "../auditLog/auditLog.service.js"; // ← ADD
 
-// Build the prompt to send to Claude for enrichment
+// ── Enrichment prompt — FR-5.1, FR-5.2, FR-5.3 ───────────────────────────────
 const buildEnrichmentPrompt = (prospect) => {
-  return `You are a B2B sales intelligence analyst. Analyze the following company/prospect data and return enriched insights.
+  return `You are a B2B sales intelligence analyst. Analyze the following company data and return enriched insights.
 
 Prospect Data:
 - Account Name: ${prospect.accountName}
@@ -24,17 +25,25 @@ Prospect Data:
 Return ONLY a valid JSON object (no markdown, no explanation) with exactly these fields:
 {
   "techStack": ["string array of inferred tech tools/platforms they likely use"],
-  "intentSignals": ["string array of buying intent indicators observed"],
+  "intentSignals": ["string array of buyer intent indicators — e.g. hiring patterns, funding events, product launches"],
+  "buyerIntentSignal": "one of: Hyper-Growth Mode | Cost Containment | Risk Mitigation | Modernization Mandate | null",
   "strategicCategory": "one of: High Value | Watch List | Not a Fit | null",
   "icpMatch": true or false,
-  "priorityScore": integer between 0 and 100
+  "priorityScore": integer between 0 and 100,
+  "missingFieldSuggestions": {
+    "primaryIndustry": "suggested value or null",
+    "annualRevenue": "suggested value or null",
+    "noOfEmployees": "suggested value or null",
+    "techAdoptionProfile": "suggested value or null",
+    "financialCapacity": "suggested value or null",
+    "marginPotential": "suggested value or null",
+    "strategicValue": "suggested value or null"
+  }
 }`;
 };
 
-// Single prospect ko Claude se enrich karo
+// ── Single prospect enrich ────────────────────────────────────────────────────
 const enrichSingleProspect = async (prospectId, userId) => {
-
-  // Prospect fetch karo
   const prospect = await prospectRepository.findById(prospectId);
   if (!prospect) {
     const error = new Error("Prospect not found");
@@ -42,140 +51,135 @@ const enrichSingleProspect = async (prospectId, userId) => {
     throw error;
   }
 
-  // Claude API call
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_API_KEY,
+      "Content-Type":      "application/json",
+      "x-api-key":         process.env.ANTHROPIC_API_KEY,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-opus-4-5",
+      model:      "claude-sonnet-4-20250514",
       max_tokens: 1024,
-      messages: [
-        {
-          role: "user",
-          content: buildEnrichmentPrompt(prospect),
-        },
-      ],
+      messages: [{ role: "user", content: buildEnrichmentPrompt(prospect) }],
     }),
   });
 
   if (!response.ok) {
-    const errBody = await response.text();
-    const error = new Error(`Claude API error: ${response.status} — ${errBody}`);
+    const error = new Error(`Claude API error: ${response.statusText}`);
     error.statusCode = 502;
     throw error;
   }
 
-  const claudeData = await response.json();
-  const rawText = claudeData.content?.[0]?.text || "";
+  const data    = await response.json();
+  const content = data.content?.[0]?.text;
+  if (!content) throw new Error("Empty response from Claude");
 
-  // Parse Claude ka JSON response
-  let enriched;
+  let parsed;
   try {
-    // Strip markdown fences if Claude adds them
-    const clean = rawText.replace(/```json|```/g, "").trim();
-    enriched = JSON.parse(clean);
+    const cleaned = content.replace(/```json|```/g, "").trim();
+    parsed = JSON.parse(cleaned);
   } catch {
-    const error = new Error("Claude returned invalid JSON — could not parse enrichment result");
-    error.statusCode = 502;
-    throw error;
+    throw new Error("Could not parse Claude response as JSON");
   }
 
-  // Validate priorityScore range
-  const priorityScore = Number(enriched.priorityScore);
-  if (isNaN(priorityScore) || priorityScore < 0 || priorityScore > 100) {
-    enriched.priorityScore = null;
-  } else {
-    enriched.priorityScore = priorityScore;
+  // ── FR-5.1 & FR-5.2: Missing fields fill karo ────────────────────────────
+  const updateData = {};
+  const suggestions = parsed.missingFieldSuggestions || {};
+
+  // Sirf null/missing fields update karo — existing override mat karo
+  if (!prospect.primaryIndustry     && suggestions.primaryIndustry)
+    updateData.primaryIndustry     = suggestions.primaryIndustry;
+  if (!prospect.annualRevenue        && suggestions.annualRevenue)
+    updateData.annualRevenue       = suggestions.annualRevenue;
+  if (!prospect.noOfEmployees        && suggestions.noOfEmployees)
+    updateData.noOfEmployees       = suggestions.noOfEmployees;
+  if (!prospect.techAdoptionProfile  && suggestions.techAdoptionProfile)
+    updateData.techAdoptionProfile = suggestions.techAdoptionProfile;
+  if (!prospect.financialCapacity    && suggestions.financialCapacity)
+    updateData.financialCapacity   = suggestions.financialCapacity;
+  if (!prospect.marginPotential      && suggestions.marginPotential)
+    updateData.marginPotential     = suggestions.marginPotential;
+  if (!prospect.strategicValue       && suggestions.strategicValue)
+    updateData.strategicValue      = suggestions.strategicValue;
+
+  // ── FR-5.3: Buyer intent signal update karo ───────────────────────────────
+  if (parsed.buyerIntentSignal && !prospect.intentSignal) {
+    updateData.intentSignal = parsed.buyerIntentSignal;
   }
 
-  // Enrichment DB mein save/update karo
-  const saved = await enrichmentRepository.upsertByProspectId(prospectId, {
-    techStack:          Array.isArray(enriched.techStack) ? enriched.techStack : [],
-    intentSignals:      Array.isArray(enriched.intentSignals) ? enriched.intentSignals : [],
-    strategicCategory:  enriched.strategicCategory || null,
-    icpMatch:           typeof enriched.icpMatch === "boolean" ? enriched.icpMatch : null,
-    priorityScore:      enriched.priorityScore,
-    enrichedBy:         "ai_module",
-    enrichedAt:         new Date(),
+  // TechFit score update
+  if (parsed.priorityScore !== undefined) {
+    updateData.techFitScore = parsed.priorityScore;
+  }
+
+  // Prospect update karo
+  if (Object.keys(updateData).length > 0) {
+    await prospectRepository.update(prospectId, updateData);
+  }
+
+  // Enrichment record save karo
+  const enrichment = await enrichmentRepository.create({
+    prospectId,
+    enrichedBy:        userId,
+    techStack:         parsed.techStack         || [],
+    intentSignals:     parsed.intentSignals     || [],
+    strategicCategory: parsed.strategicCategory || null,
+    icpMatch:          parsed.icpMatch          ?? false,
+    priorityScore:     parsed.priorityScore     || 0,
+    rawResponse:       parsed,
   });
 
-  // Notification trigger karo agar userId mila
-  if (userId) {
-    await notificationService.create({
-      userId,
-      type:          "enrichment_done",
-      message:       `Enrichment completed for ${prospect.accountName}`,
-      refId:         prospectId,
-      refCollection: "prospects",
-    });
-  }
+  // ── FR-4.3: Audit log ─────────────────────────────────────────────────────
+  await auditLogService.log({
+    userId,
+    action:      "UPDATE",
+    entity:      "Prospect",
+    entityId:    prospectId,
+    description: `AI enrichment completed for "${prospect.accountName}"`,
+    metadata: {
+      fieldsUpdated:   Object.keys(updateData),
+      intentSignals:   parsed.intentSignals || [],
+      priorityScore:   parsed.priorityScore,
+      icpMatch:        parsed.icpMatch,
+    },
+  });
 
-  return saved;
+  return enrichment;
 };
 
 const enrichmentService = {
 
-  // Manual enrichment — single prospect
-  enrichOne: async (prospectId, userId) => {
+  enrichSingle: async (prospectId, userId) => {
     return await enrichSingleProspect(prospectId, userId);
   },
 
-  // Bulk enrichment — array of prospectIds
+  // Bulk enrich — background mein chalta hai
   enrichBulk: async (prospectIds, userId) => {
-    if (!Array.isArray(prospectIds) || prospectIds.length === 0) {
-      const error = new Error("prospectIds array is required and must not be empty");
-      error.statusCode = 400;
-      throw error;
-    }
+    const results = { success: 0, failed: 0, errors: [] };
 
-    const results = [];
-    const errors  = [];
-
-    // Ek ek karke process karo — rate limit avoid karne ke liye
     for (const prospectId of prospectIds) {
       try {
-        const enriched = await enrichSingleProspect(prospectId, null);
-        results.push({ prospectId, status: "success", data: enriched });
+        await enrichSingleProspect(prospectId, userId);
+        results.success++;
       } catch (err) {
-        errors.push({ prospectId, status: "failed", reason: err.message });
+        results.failed++;
+        results.errors.push({ prospectId, error: err.message });
+        console.error(`Enrichment failed for ${prospectId}:`, err.message);
       }
     }
 
-    // Bulk complete hone ke baad ek notification
-    if (userId && results.length > 0) {
-      await notificationService.create({
-        userId,
-        type:          "enrichment_done",
-        message:       `Bulk enrichment complete — ${results.length} succeeded, ${errors.length} failed`,
-        refId:         null,
-        refCollection: null,
-      });
-    }
+    await notificationService.create({
+      userId,
+      type:    "enrichment_complete",
+      message: `Bulk enrichment done — ${results.success} enriched, ${results.failed} failed`,
+    });
 
-    return {
-      total:        prospectIds.length,
-      successCount: results.length,
-      failedCount:  errors.length,
-      results,
-      errors,
-    };
+    return results;
   },
 
-  // Get enrichment data for a prospect
-  getByProspectId: async (prospectId) => {
-    const enrichment = await enrichmentRepository.findByProspectId(prospectId);
-
-    if (!enrichment) {
-      const error = new Error("Enrichment not found for this prospect");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    return enrichment;
+  getHistory: async (prospectId) => {
+    return await enrichmentRepository.findByProspectId(prospectId);
   },
 };
 

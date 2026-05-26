@@ -147,15 +147,22 @@ contactSchema.pre("save", function () {
   this.hasLinkedIn = !!this.linkedIn;
 });
 
-// ─── Pre-insertMany — computed fields bulk insert mein bhi set karo ───────────
+
+
 contactSchema.pre("insertMany", function (next, docs) {
+  if (!docs || !Array.isArray(docs)) {
+    if (typeof next === "function") next();
+    return;
+  }
   docs.forEach((doc) => {
     doc.hasEmail    = !!doc.email;
     doc.hasPhone    = !!(doc.primaryPhone || doc.primaryMobNo);
     doc.hasLinkedIn = !!doc.linkedIn;
   });
-  next();
+  if (typeof next === "function") next();
 });
+
+
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 // Account link indexes

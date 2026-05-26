@@ -8,11 +8,29 @@ const prospectRepository = {
   },
 
   // Bulk insert — 1000-1000 rows ke chunks ke liye
-  insertMany: async (rows) => {
-    return await Prospect.insertMany(rows, {
-      ordered: false,  // ek row fail ho toh baki insert hote rahe
-      rawResult: true, // result mein insertedCount milega
-    });
+  insertMany: async (rows, options = {}) => {
+    try {
+      // accountNameLower manually set karo — hook pe depend mat karo
+      const prepared = rows.map(r => ({
+        ...r,
+        accountNameLower: r.accountName
+          ? r.accountName.toLowerCase().trim()
+          : null,
+      }));
+
+      const result = await Prospect.insertMany(prepared, {
+        ordered:   false,  // ek row fail ho toh baki insert hote rahe
+        rawResult: true,   // result mein insertedCount milega
+        ...options,
+      });
+      return result;
+    } catch (err) {
+      // BulkWriteError — partial insert hua hai
+      if (err.name === "BulkWriteError" || err.result) {
+        return err.result;
+      }
+      throw err;
+    }
   },
 
   // Get all prospects with pagination and filters

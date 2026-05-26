@@ -1,11 +1,44 @@
 import fs from "fs";
 import { processContactFile } from "../../common/utils/contactFileParser.js";
 import contactRepository from "../contacts/contact.repository.js";
-import prospectRepository from "../prospect/prospect.repository.js";
 import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
+import Prospect from "../prospect/prospect.model.js";
 
 const CHUNK_SIZE = 1000;
+
+// ─── Helper: Prospect se denormalized fields nikalo ───────────────────────────
+const extractAccountFields = (prospect) => ({
+  accountIndustry:      prospect.primaryIndustry  || null,
+  accountCountry:       prospect.country           || null,
+  accountCity:          prospect.hqLocationCity    || null,
+  accountEmployees:     prospect.noOfEmployees     || null,
+  accountRevenue:       prospect.annualRevenue     || null,
+  accountBusinessModel: prospect.businessModel     || null,
+  accountSalesPriority: prospect.salesPriority     || null,
+  accountClvRanking:    prospect.clvRanking        || null,
+  accountTechFitScore:  prospect.techFitScore      || null,
+  accountIntentSignal:  prospect.intentSignal      || null,
+  accountWebsite:       prospect.website           || null,
+});
+
+// ─── Helper: Safe insertMany — 1 row se 1 lakh tak handle karo ───────────────
+const safeInsertMany = async (repository, docs, chunkNum) => {
+  if (!docs || docs.length === 0) return 0;
+  try {
+    await repository.insertMany(docs, { ordered: false });
+    console.log(`✅ Chunk ${chunkNum}: ${docs.length} rows inserted`);
+    return docs.length;
+  } catch (err) {
+    if (err.name === "BulkWriteError" || err.code === 11000) {
+      const inserted = err.result?.nInserted ?? err.result?.insertedCount ?? 0;
+      console.warn(`⚠️  Chunk ${chunkNum}: ${inserted}/${docs.length} inserted (partial)`);
+      return inserted;
+    }
+    console.error(`❌ Chunk ${chunkNum} error:`, err.message);
+    return 0;
+  }
+};
 
 const contactImportService = {
 
@@ -18,7 +51,7 @@ const contactImportService = {
       console.log("❌ First 5 errors:", errorDetails.slice(0, 5));
     }
 
-    // Import log create karo
+    // ── Import log create ──────────────────────────────────────────────────
     const importLog = await importLogRepository.create({
       fileName:     filePath.split(/[\\/]/).pop(),
       importType:   "excel",
@@ -30,55 +63,77 @@ const contactImportService = {
       status:       "processing",
     });
 
-    // ── Step 1: Saare unique accountNames collect karo ────────────────────────
-    const uniqueAccountNames = [...new Set(
-      validRows.map(r => r.accountName?.toLowerCase()).filter(Boolean)
-    )];
-
-    // ── Step 2: DB mein matching accounts dhundo ek hi query mein ─────────────
-    const { prospects: existingAccounts } = await prospectRepository.findAll({
-      filter: {
-        accountName: {
-          $in: uniqueAccountNames.map(n => new RegExp(`^${n}$`, "i")),
-        },
-      },
-      page:  1,
-      limit: 999999,
-    });
-
-    // accountName (lowercase) → accountId map banao
-    const accountMap = {};
-    for (const account of existingAccounts) {
-      accountMap[account.accountName.toLowerCase()] = account._id;
+    // ── Early exit — koi valid row nahi ───────────────────────────────────
+    if (!validRows || validRows.length === 0) {
+      await importLogRepository.update(importLog._id, {
+        status:      "failed",
+        failedCount: errorDetails.length,
+      });
+      try { fs.unlinkSync(filePath); } catch (_) {}
+      return {
+        importLogId:   importLog._id,
+        totalRows,
+        successCount:  0,
+        failedCount:   errorDetails.length,
+        linkedCount:   0,
+        unlinkedCount: 0,
+        errorDetails,
+        status:        "failed",
+      };
     }
 
-    // ── Step 3: Apollo style — rows prepare karo ──────────────────────────────
-    // Contact skip nahi hoga agar account nahi mila
-    // accountId = null rahega — baad mein link ho sakta hai
+    // ── Step 1: Unique accountNames — ek baar mein saare fetch karo ────────
+    const uniqueAccountNames = [
+      ...new Set(validRows.map(r => r.accountName?.trim()).filter(Boolean)),
+    ];
+
+    const accountMap = {};
+
+    if (uniqueAccountNames.length > 0) {
+      // Regex nahi — exact match via accountNameLower index
+      // 1 lakh contacts pe bhi fast rahega
+      const existingAccounts = await Prospect.find({
+        accountNameLower: { $in: uniqueAccountNames.map(n => n.toLowerCase()) },
+      }).select(
+        "_id accountName accountNameLower primaryIndustry country hqLocationCity " +
+        "noOfEmployees annualRevenue businessModel salesPriority clvRanking " +
+        "techFitScore intentSignal website"
+      ).lean();
+
+      for (const acc of existingAccounts) {
+        if (acc.accountNameLower) accountMap[acc.accountNameLower] = acc;
+      }
+
+      console.log(`✅ Accounts matched: ${existingAccounts.length} of ${uniqueAccountNames.length}`);
+    }
+
+    // ── Step 2: Rows prepare karo ──────────────────────────────────────────
     const preparedRows = [];
-    let linkedCount   = 0;
-    let unlinkedCount = 0;
+    let linkedCount    = 0;
+    let unlinkedCount  = 0;
 
     for (const row of validRows) {
-      const accountKey = row.accountName?.toLowerCase();
-      const accountId  = accountMap[accountKey] || null; // null — skip nahi karo
+      const nameKey   = row.accountName?.trim().toLowerCase();
+      const prospect  = nameKey ? accountMap[nameKey] : null;
+      const accountFields = prospect ? extractAccountFields(prospect) : {};
 
       preparedRows.push({
         ...row,
-        accountName: row.accountName || null, // reference ke liye store karo
-        accountId,                            // null bhi ho sakta hai
-        isLinked:    !!accountId,             // true agar account mila
+        accountId:   prospect ? prospect._id : null,
+        accountName: row.accountName?.trim() || null,
+        isLinked:    !!prospect,
+        ...accountFields,
         source:      filePath.toLowerCase().endsWith(".csv") ? "csv" : "excel",
         importLogId: importLog._id,
       });
 
-      if (accountId) linkedCount++;
-      else           unlinkedCount++;
+      if (prospect) linkedCount++;
+      else          unlinkedCount++;
     }
 
     console.log(`📦 Prepared: ${preparedRows.length} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
 
-    // ── Step 4: Chunked insertMany ─────────────────────────────────────────────
+    // ── Step 3: Chunked insertMany ─────────────────────────────────────────
     let successCount = 0;
     const insertErrors = [];
 
@@ -86,28 +141,21 @@ const contactImportService = {
       const chunk    = preparedRows.slice(i, i + CHUNK_SIZE);
       const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
 
-      try {
-        const result   = await contactRepository.insertMany(chunk);
-        const inserted = result.insertedCount ?? chunk.length;
-        successCount  += inserted;
-        console.log(`✅ Chunk ${chunkNum}: ${inserted} contacts inserted`);
-      } catch (err) {
-        console.error(`❌ Chunk ${chunkNum} error:`, err.message);
-        if (err.result?.insertedCount) {
-          successCount += err.result.insertedCount;
-        }
-        insertErrors.push(`Chunk ${chunkNum} fail: ${err.message}`);
+      const inserted = await safeInsertMany(contactRepository, chunk, chunkNum);
+      successCount  += inserted;
+
+      if (inserted < chunk.length) {
+        insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
       }
 
-      // Progress update karo har chunk ke baad
       await importLogRepository.update(importLog._id, { successCount });
     }
 
-    // ── Step 5: Final status update ───────────────────────────────────────────
+    // ── Step 4: Final status ───────────────────────────────────────────────
     const allErrors   = [...errorDetails, ...insertErrors];
     const finalStatus =
-      successCount === 0               ? "failed"    :
-      successCount < validRows.length  ? "partial"   :
+      successCount === 0              ? "failed"    :
+      successCount < validRows.length ? "partial"   :
       "completed";
 
     await importLogRepository.update(importLog._id, {
@@ -117,10 +165,8 @@ const contactImportService = {
       status:       finalStatus,
     });
 
-    // File disk se delete karo
-    fs.unlinkSync(filePath);
+    try { fs.unlinkSync(filePath); } catch (_) {}
 
-    // Notification bhejo
     await notificationService.create({
       userId,
       type:          "import_complete",

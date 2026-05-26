@@ -14,8 +14,13 @@ import icpRoutes           from "../modules/icp/icp.routes.js";
 import auditLogRoutes      from "../modules/auditLog/auditLog.routes.js";
 import contactRoutes       from "../modules/contacts/contact.routes.js";        // contacts CRUD
 
+import migrationRoutes from "./migration.route.js";
+
+
+
 const router = Router();
 
+router.use("/migrate", migrationRoutes);
 router.use("/auth",            authRoutes);
 router.use("/prospects",       prospectRoutes);
 router.use("/import",          importRoutes);
