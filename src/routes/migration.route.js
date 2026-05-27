@@ -10,9 +10,9 @@ router.use(authMiddleware);
 // POST /api/migrate/run-all
 router.post("/run-all", async (req, res, next) => {
   try {
-    // ── 1. accountNameLower — cursor se ek ek update karo ─────────────────
-    // Pipeline array nahi chalti purani Mongoose mein
-    // Raw MongoDB driver use karo directly
+    // ── 1. accountNameLower — update records (cursor or raw driver)
+    // Aggregation pipeline arrays may not be supported in older Mongoose versions.
+    // Use the raw MongoDB driver for this operation.
     const db            = mongoose.connection.db;
     const prospectsColl = db.collection("prospects");
     const contactsColl  = db.collection("contacts");
@@ -103,7 +103,7 @@ router.post("/run-all", async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      message: "Migration complete — ab sab filters kaam karenge",
+      message: "Migration complete — filters updated",
       data: {
         prospectsFixed:      r1.modifiedCount,
         contactsWithPhone,

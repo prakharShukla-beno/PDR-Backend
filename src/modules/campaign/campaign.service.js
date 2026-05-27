@@ -139,7 +139,7 @@ const campaignService = {
     return { message: "Prospect removed from campaign" };
   },
 
-  // ── FR-9.3 FIX: updateStats — Campaign import add kiya ──────────────────
+  // ── FR-9.3 FIX: updateStats — added for campaign import
   updateStats: async (id, stats) => {
     const updateData = {};
     if (stats.sentCount   !== undefined) updateData["stats.sentCount"]   = stats.sentCount;
@@ -148,7 +148,7 @@ const campaignService = {
     if (stats.replyCount  !== undefined) updateData["stats.replyCount"]  = stats.replyCount;
     if (stats.conversions !== undefined) updateData["stats.conversions"] = stats.conversions;
 
-    // Campaign import fix — ab crash nahi karega
+    // Fix for campaign import to prevent crashes
     return await Campaign.findByIdAndUpdate(
       id,
       { $set: updateData },

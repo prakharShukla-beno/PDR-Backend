@@ -82,9 +82,9 @@ const FIELD_MAP = {
   "contact linkedin":      "contact.linkedIn",
 
   // ── Contact — Client Format ────────────────────────────────────────────────
-  "poc-first name":        "contact.firstName",  // merge hoga → name
+  "poc-first name":        "contact.firstName",  // will be merged into name
   "poc first name":        "contact.firstName",
-  "poc-last name":         "contact.lastName",   // merge hoga → name
+  "poc-last name":         "contact.lastName",   // will be merged into name
   "poc last name":         "contact.lastName",
   "phone 1":               "contact.phone",      // client format
   "phone1":                "contact.phone",
@@ -94,8 +94,8 @@ const FIELD_MAP = {
   "job2":                  "contact.job2",       // client format
 };
 
-// ── Enum validation — sirf Beno format fields ke liye ─────────────────────────
-// Client format fields (tech1/2/3, phone1/2, job1/2) free text hain
+// ── Enum validation — only for Beno format fields
+// Client-specific fields (tech1/2/3, phone1/2, job1/2) are free text
 const ENUM_FIELDS = {
   accountSource:       ["LinkedIn", "Google", "Social Media", "Referral", "Event", "Cold Outreach"],
   primaryIndustry:     [
@@ -118,7 +118,7 @@ const ENUM_FIELDS = {
   clvRanking:          ["Tier-A (Strategic)", "Tier-B (Core)", "Tier-C (Mass)"],
   salesPriority:       ["P1 (Tier A+Active)", "P2 (Tier B+Active)", "P3 (Tier A+Cold)", "P4 (Tier B+Cold)"],
   "contact.seniority": ["C-Suite", "VP", "Director", "Manager", "Individual Contributor"],
-  // NOTE: primaryTechStack enum hataya — client file mein free text hota hai
+  // NOTE: primaryTechStack enum removed — client file uses free text for tech stack
 };
 
 const parseExcel = (filePath) => {
@@ -152,7 +152,7 @@ const mapRowToSchema = (rawRow) => {
     }
   }
 
-  // ── Client format: POC-First Name + POC-Last Name → name merge ────────────
+  // ── Client format: POC-First Name + POC-Last Name → merge into name field
   if (contact.firstName || contact.lastName) {
     const fullName = [contact.firstName, contact.lastName]
       .filter(Boolean).join(" ").trim();

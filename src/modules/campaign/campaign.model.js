@@ -45,13 +45,13 @@ const campaignSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Virtual — openRate % calculate karo on the fly
+// Virtual — calculate open rate percentage on the fly
 campaignSchema.virtual("openRate").get(function () {
   if (!this.stats.sentCount) return 0;
   return +((this.stats.openCount / this.stats.sentCount) * 100).toFixed(1);
 });
 
-// Virtual — CTR % calculate karo
+// Virtual — calculate CTR percentage on the fly
 campaignSchema.virtual("ctr").get(function () {
   if (!this.stats.sentCount) return 0;
   return +((this.stats.clickCount / this.stats.sentCount) * 100).toFixed(1);

@@ -2,7 +2,7 @@ import duplicateService from "./duplicate.service.js";
 
 const duplicateController = {
 
-  // GET /api/duplicates — saare duplicate pairs
+  // GET /api/duplicates — all duplicate pairs
   getAll: async (req, res, next) => {
     try {
       const { page, limit, status } = req.query;
@@ -33,7 +33,7 @@ const duplicateController = {
     }
   },
 
-  // PUT /api/duplicates/:id/dismiss — yeh duplicate nahi hai
+  // PUT /api/duplicates/:id/dismiss — mark as not a duplicate
   dismiss: async (req, res, next) => {
     try {
       const updated = await duplicateService.dismiss(req.params.id, req.user._id);
@@ -48,7 +48,7 @@ const duplicateController = {
     }
   },
 
-  // PUT /api/duplicates/:id/merge — prospectId2 ko prospectId1 mein merge karo
+  // PUT /api/duplicates/:id/merge — merge prospectId2 into prospectId1
   merge: async (req, res, next) => {
     try {
       const result = await duplicateService.merge(req.params.id, req.user._id);

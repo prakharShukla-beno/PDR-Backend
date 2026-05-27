@@ -58,13 +58,13 @@ const icpValidation = [
     .isArray().withMessage("targetDesignations must be an array"),
 ];
 
-// POST   /api/icp                        — naya ICP profile banao
-// GET    /api/icp                        — saare profiles (?isActive=true&page&limit)
-// GET    /api/icp/:id                    — single profile detail
-// PUT    /api/icp/:id                    — profile update karo
-// DELETE /api/icp/:id                    — profile delete karo
-// GET    /api/icp/:id/match-prospects    — ICP criteria se matching prospects
-// GET    /api/icp/:id/match-persona      — buyer persona se best POC dhundo
+// POST   /api/icp                        — create a new ICP profile
+// GET    /api/icp                        — list profiles (?isActive=true&page&limit)
+// GET    /api/icp/:id                    — get single profile detail
+// PUT    /api/icp/:id                    — update an ICP profile
+// DELETE /api/icp/:id                    — delete an ICP profile
+// GET    /api/icp/:id/match-prospects    — match prospects by ICP criteria
+// GET    /api/icp/:id/match-persona      — find best POC by buyer persona
 
 router.post("/",                        icpValidation, icpController.create);
 router.get("/",                         icpController.getAll);

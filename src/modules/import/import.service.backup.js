@@ -78,7 +78,7 @@
 //         (row.accountName && existingNames.has(row.accountName.toLowerCase())) ||
 //         (row.website     && existingWebsites.has(row.website.toLowerCase()));
 
-//       // contacts[] array hatao — Contact collection mein alag save hoga
+//       // contacts[] array removed — save contacts separately in the Contact collection
 //       const { contacts, ...prospectData } = row;
 
 //       preparedRows.push({
@@ -97,7 +97,7 @@
 //     // ── Chunked insert — Prospects ─────────────────────────────────────────
 //     let successCount = 0;
 //     const insertErrors = [];
-//     const insertedProspects = []; // inserted prospects track karo — contact ke liye
+//     const insertedProspects = []; // track inserted prospects for contact processing
 
 //     for (let i = 0; i < preparedRows.length; i += CHUNK_SIZE) {
 //       const chunk    = preparedRows.slice(i, i + CHUNK_SIZE);
@@ -109,7 +109,7 @@
 //         successCount  += inserted;
 //         console.log(`✅ Chunk ${chunkNum}: ${inserted} rows inserted`);
 
-//         // Inserted prospects ko track karo
+//         // Track inserted prospects
 //         if (result.ops) insertedProspects.push(...result.ops);
 
 //       } catch (err) {
@@ -123,8 +123,8 @@
 //       await importLogRepository.update(importLog._id, { successCount });
 //     }
 
-//     // ── Contact bhi Contact collection mein save karo ─────────────────────
-//     // Account Excel mein jo contacts the (POC fields) unhe Contact collection mein bhi daalo
+//     // ── Also save contacts in the Contact collection ─────────────────────
+//     // Any contact (POC fields) from the account Excel should also be saved in the contacts collection
 //     const contactsToInsert = [];
 
 //     for (let i = 0; i < validRows.length; i++) {
@@ -133,7 +133,7 @@
 
 //       if (!contacts || contacts.length === 0) continue;
 
-//       // Is accountName ka prospect dhundo — abhi insert hua hoga
+//       // Find the prospect for this accountName — it may have been inserted just now
 //       const matchedProspect = await Prospect.findOne({
 //         accountNameLower: row.accountName?.toLowerCase().trim(),
 //       }).select("_id primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal website").lean();
@@ -145,7 +145,7 @@
 //       for (const contact of contacts) {
 //         if (!contact.name && !contact.email && !contact.phone) continue;
 
-//         // name → firstName lastName split karo
+//         // Split full name into firstName and lastName
 //         const nameParts = (contact.name || "").trim().split(" ");
 //         const firstName = nameParts[0] || null;
 //         const lastName  = nameParts.slice(1).join(" ") || null;
@@ -177,7 +177,7 @@
 //       }
 //     }
 
-//     // Contact collection mein insert karo
+//     // Insert into the Contact collection
 //     if (contactsToInsert.length > 0) {
 //       for (let i = 0; i < contactsToInsert.length; i += CHUNK_SIZE) {
 //         const chunk = contactsToInsert.slice(i, i + CHUNK_SIZE);
@@ -190,9 +190,8 @@
 //       }
 //     }
 
-//     // ── Unlinked contacts auto-link ────────────────────────────────────────
-//     // Pehle se imported contacts jo is accountName se match karte hain
-//     // lekin abhi tak unlinked the
+//     // ── Unlinked contacts auto-link ───────────────────────────────────────-
+//     // Previously imported contacts that match this accountName but remained unlinked
 //     if (accountNames.length > 0) {
 //       try {
 //         const newlyLinked = await Prospect.find({
@@ -215,9 +214,9 @@
 //             }
 //           );
 //         }
-//         console.log(`🔗 Unlinked contacts auto-linked`);
+//         console.log(`Unlinked contacts auto-linked`);
 //       } catch (err) {
-//         console.error("❌ Auto-link error:", err.message);
+//         console.error("Auto-link error:", err.message);
 //       }
 //     }
 
@@ -324,13 +323,13 @@
 //       status:       "processing",
 //     });
 
-//     // ── Step 1: Unique accountNames collect karo ───────────────────────────
+//     // ── Step 1: Collect unique accountNames ───────────────────────────────
 //     const uniqueAccountNames = [
 //       ...new Set(validRows.map(r => r.accountName?.trim()).filter(Boolean)),
 //     ];
 
-//     // ── Step 2: Accounts dhundo — EXACT MATCH (regex nahi) ────────────────
-//     // Regex se 50k queries MongoDB crash kar deti hain
+//     // ── Step 2: Find matching accounts — EXACT MATCH (avoid regex)
+//     // Using regex for 50k names can crash MongoDB
 //     const accountMap = {};
 
 //     if (uniqueAccountNames.length > 0) {
@@ -353,7 +352,7 @@
 //       console.log(`✅ Accounts matched: ${existingAccounts.length} of ${uniqueAccountNames.length}`);
 //     }
 
-//     // ── Step 3: Rows prepare karo with denormalized fields ─────────────────
+//     // ── Step 3: Prepare rows with denormalized account fields ─────────────
 //     const preparedRows = [];
 //     let linkedCount   = 0;
 //     let unlinkedCount = 0;

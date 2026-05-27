@@ -4,6 +4,7 @@ import contactRepository from "../contacts/contact.repository.js";
 import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
 import Prospect from "../prospect/prospect.model.js";
+import Contact from "../contacts/contact.model.js";
 
 const CHUNK_SIZE = 1000;
 
@@ -22,7 +23,7 @@ const extractAccountFields = (prospect) => ({
   accountWebsite:       prospect.website           || null,
 });
 
-// ─── Helper: Safe insertMany — 1 row se 1 lakh tak handle karo ───────────────
+// ─── Helper: Safe insertMany ──────────────────────────────────────────────────
 const safeInsertMany = async (repository, docs, chunkNum) => {
   if (!docs || docs.length === 0) return 0;
   try {
@@ -42,6 +43,9 @@ const safeInsertMany = async (repository, docs, chunkNum) => {
 
 const contactImportService = {
 
+  // ===========================================================================
+  // CONTACT EXCEL IMPORT — Upsert: email pe match
+  // ===========================================================================
   processContactImport: async (filePath, userId) => {
 
     const { validRows, errorDetails, totalRows } = processContactFile(filePath);
@@ -53,7 +57,7 @@ const contactImportService = {
 
     // ── Import log create ──────────────────────────────────────────────────
     const importLog = await importLogRepository.create({
-      fileName:     filePath.split(/[\\/]/).pop(),
+      fileName:     filePath.split(/[\\\/]/).pop(),
       importType:   "excel",
       uploadedBy:   userId,
       totalRows,
@@ -63,7 +67,7 @@ const contactImportService = {
       status:       "processing",
     });
 
-    // ── Early exit — koi valid row nahi ───────────────────────────────────
+    // ── Early exit ─────────────────────────────────────────────────────────
     if (!validRows || validRows.length === 0) {
       await importLogRepository.update(importLog._id, {
         status:      "failed",
@@ -82,16 +86,13 @@ const contactImportService = {
       };
     }
 
-    // ── Step 1: Unique accountNames — ek baar mein saare fetch karo ────────
+    // ── Step 1: Account map banao ──────────────────────────────────────────
     const uniqueAccountNames = [
       ...new Set(validRows.map(r => r.accountName?.trim()).filter(Boolean)),
     ];
-
     const accountMap = {};
 
     if (uniqueAccountNames.length > 0) {
-      // Regex nahi — exact match via accountNameLower index
-      // 1 lakh contacts pe bhi fast rahega
       const existingAccounts = await Prospect.find({
         accountNameLower: { $in: uniqueAccountNames.map(n => n.toLowerCase()) },
       }).select(
@@ -103,21 +104,36 @@ const contactImportService = {
       for (const acc of existingAccounts) {
         if (acc.accountNameLower) accountMap[acc.accountNameLower] = acc;
       }
-
       console.log(`✅ Accounts matched: ${existingAccounts.length} of ${uniqueAccountNames.length}`);
     }
 
-    // ── Step 2: Rows prepare karo ──────────────────────────────────────────
-    const preparedRows = [];
-    let linkedCount    = 0;
-    let unlinkedCount  = 0;
+    // ── Step 2: Existing contacts check — email pe ─────────────────────────
+    const emails = validRows.map(r => r.email?.toLowerCase()).filter(Boolean);
+    const existingEmailSet = new Set();
+
+    if (emails.length > 0) {
+      const existingContacts = await Contact.find({
+        email: { $in: emails },
+      }).select("email").lean();
+
+      for (const c of existingContacts) {
+        if (c.email) existingEmailSet.add(c.email.toLowerCase());
+      }
+      console.log(`📧 Existing contacts by email: ${existingEmailSet.size}`);
+    }
+
+    // ── Step 3: Rows prepare ───────────────────────────────────────────────
+    const newRows    = []; // fresh insert
+    const upsertRows = []; // email match — update
+    let linkedCount   = 0;
+    let unlinkedCount = 0;
 
     for (const row of validRows) {
-      const nameKey   = row.accountName?.trim().toLowerCase();
-      const prospect  = nameKey ? accountMap[nameKey] : null;
+      const nameKey       = row.accountName?.trim().toLowerCase();
+      const prospect      = nameKey ? accountMap[nameKey] : null;
       const accountFields = prospect ? extractAccountFields(prospect) : {};
 
-      preparedRows.push({
+      const preparedRow = {
         ...row,
         accountId:   prospect ? prospect._id : null,
         accountName: row.accountName?.trim() || null,
@@ -125,37 +141,62 @@ const contactImportService = {
         ...accountFields,
         source:      filePath.toLowerCase().endsWith(".csv") ? "csv" : "excel",
         importLogId: importLog._id,
-      });
+      };
 
       if (prospect) linkedCount++;
       else          unlinkedCount++;
+
+      const emailKey = row.email?.toLowerCase();
+      if (emailKey && existingEmailSet.has(emailKey)) {
+        upsertRows.push(preparedRow); // email match — update karo
+      } else {
+        newRows.push(preparedRow);    // naya — insert karo
+      }
     }
 
-    console.log(`📦 Prepared: ${preparedRows.length} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
+    console.log(`📦 New: ${newRows.length} | Update existing: ${upsertRows.length} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
 
-    // ── Step 3: Chunked insertMany ─────────────────────────────────────────
+    // ── Step 4: Naye contacts insert ───────────────────────────────────────
     let successCount = 0;
     const insertErrors = [];
 
-    for (let i = 0; i < preparedRows.length; i += CHUNK_SIZE) {
-      const chunk    = preparedRows.slice(i, i + CHUNK_SIZE);
+    for (let i = 0; i < newRows.length; i += CHUNK_SIZE) {
+      const chunk    = newRows.slice(i, i + CHUNK_SIZE);
       const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
-
       const inserted = await safeInsertMany(contactRepository, chunk, chunkNum);
       successCount  += inserted;
-
       if (inserted < chunk.length) {
         insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
       }
-
       await importLogRepository.update(importLog._id, { successCount });
     }
 
-    // ── Step 4: Final status ───────────────────────────────────────────────
+    // ── Step 5: Existing contacts update — email pe match ─────────────────
+    let updatedCount = 0;
+    for (const row of upsertRows) {
+      try {
+        await Contact.findOneAndUpdate(
+          { email: row.email?.toLowerCase() },
+          { $set: row },
+          { runValidators: false }
+        );
+        updatedCount++;
+      } catch (err) {
+        insertErrors.push(`Contact update failed: ${row.email} — ${err.message}`);
+      }
+    }
+
+    if (updatedCount > 0) {
+      successCount += updatedCount;
+      console.log(`🔄 Updated existing contacts: ${updatedCount}`);
+      await importLogRepository.update(importLog._id, { successCount });
+    }
+
+    // ── Step 6: Final status ───────────────────────────────────────────────
     const allErrors   = [...errorDetails, ...insertErrors];
     const finalStatus =
-      successCount === 0              ? "failed"    :
-      successCount < validRows.length ? "partial"   :
+      successCount === 0              ? "failed"  :
+      successCount < validRows.length ? "partial" :
       "completed";
 
     await importLogRepository.update(importLog._id, {
@@ -170,17 +211,19 @@ const contactImportService = {
     await notificationService.create({
       userId,
       type:          "import_complete",
-      message:       `Contact import ${finalStatus} — ${successCount} of ${totalRows} imported. Linked: ${linkedCount}, Unlinked: ${unlinkedCount}`,
+      message:       `Contact import ${finalStatus} — ${newRows.length} new, ${updatedCount} updated. Linked: ${linkedCount}, Unlinked: ${unlinkedCount}`,
       refId:         importLog._id,
       refCollection: "importLogs",
     });
 
-    console.log(`🏁 Contact import done — ${successCount}/${totalRows} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
+    console.log(`🏁 Contact import done — New: ${newRows.length} | Updated: ${updatedCount} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
 
     return {
       importLogId:   importLog._id,
       totalRows,
       successCount,
+      newCount:      newRows.length,
+      updatedCount,
       failedCount:   allErrors.length,
       linkedCount,
       unlinkedCount,

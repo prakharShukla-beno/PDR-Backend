@@ -55,7 +55,7 @@ const contactController = {
     }
   },
 
-  // GET /api/contacts/account/:accountId  — ek account ke saare contacts
+  // GET /api/contacts/account/:accountId  — all contacts for an account
   getByAccountId: async (req, res, next) => {
     try {
       const contacts = await contactService.getByAccountId(req.params.accountId);
@@ -98,7 +98,7 @@ const contactController = {
     }
   },
 
-  // POST /api/contacts/:id/campaigns/:campaignId  — campaign mein add karo
+  // POST /api/contacts/:id/campaigns/:campaignId  — add contact to campaign
   addToCampaign: async (req, res, next) => {
     try {
       const { id, campaignId } = req.params;
@@ -114,7 +114,7 @@ const contactController = {
     }
   },
 
-  // DELETE /api/contacts/:id/campaigns/:campaignId  — campaign se remove karo
+  // DELETE /api/contacts/:id/campaigns/:campaignId  — remove contact from campaign
   removeFromCampaign: async (req, res, next) => {
     try {
       const { id, campaignId } = req.params;

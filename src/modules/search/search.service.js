@@ -1,10 +1,10 @@
 import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
 
-// ─── Helper: Include/Exclude filter banana ────────────────────────────────────
+// ─── Helper: Build Include/Exclude filter ──────────────────────────────────
 // inc = ["Healthcare", "SaaS"]  → $in
 // exc = ["Manufacturing"]       → $nin
-// Dono saath bhi ho sakte hain
+// Both include and exclude may be provided
 const buildIncExcFilter = (inc, exc) => {
   const filter = {};
   const incArr = toArray(inc);
@@ -26,7 +26,7 @@ const searchService = {
 
   // ===========================================================================
   // ACCOUNT SEARCH — Prospect Collection
-  // Include/Exclude + saare fields + pagination
+  // Include/Exclude filters + various fields + pagination
   // ===========================================================================
   searchProspects: async (query) => {
     const {
@@ -141,8 +141,8 @@ const searchService = {
 
   // ===========================================================================
   // CONTACT SEARCH — Contact Collection
-  // Apollo style — contact fields + denormalized account fields
-  // Include/Exclude dono
+  // Apollo style — contact fields plus denormalized account fields
+  // Supports include/exclude filters
   // ===========================================================================
   searchContacts: async (query) => {
     const {
@@ -159,7 +159,7 @@ const searchService = {
       hasEmail,
       hasPhone,
       hasLinkedIn,
-      isLinked,    // account se linked hai ya nahi
+      isLinked,    // whether linked to an account
 
       // Account level filters (denormalized) — Include/Exclude
       accountIndustryInclude,      accountIndustryExclude,
@@ -257,7 +257,7 @@ const searchService = {
   },
 
   // ===========================================================================
-  // FILTER OPTIONS — Frontend dropdowns ke liye
+  // FILTER OPTIONS — for frontend dropdowns
   // Dono collections se unique values
   // ===========================================================================
   getFilterOptions: async () => {

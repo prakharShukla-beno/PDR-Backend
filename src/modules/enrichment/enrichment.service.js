@@ -1,7 +1,7 @@
 import enrichmentRepository from "./enrichment.repository.js";
 import prospectRepository from "../prospect/prospect.repository.js";
 import notificationService from "../notification/notification.service.js";
-import auditLogService from "../auditLog/auditLog.service.js"; // ← ADD
+import auditLogService from "../auditLog/auditLog.service.js";
 
 // ── Enrichment prompt — FR-5.1, FR-5.2, FR-5.3 ───────────────────────────────
 const buildEnrichmentPrompt = (prospect) => {
@@ -51,77 +51,78 @@ const enrichSingleProspect = async (prospectId, userId) => {
     throw error;
   }
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  // ── Gemini API call ───────────────────────────────────────────────────────
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+  console.log("Gemini URL:", geminiUrl.replace(process.env.GEMINI_API_KEY, "***"));
+
+  const response = await fetch(geminiUrl, {
     method: "POST",
-    headers: {
-      "Content-Type":      "application/json",
-      "x-api-key":         process.env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model:      "claude-sonnet-4-20250514",
-      max_tokens: 1024,
-      messages: [{ role: "user", content: buildEnrichmentPrompt(prospect) }],
+      contents: [{ parts: [{ text: buildEnrichmentPrompt(prospect) }] }],
     }),
   });
 
   if (!response.ok) {
-    const error = new Error(`Claude API error: ${response.statusText}`);
+    const errBody = await response.json();
+    console.error("Gemini full error:", JSON.stringify(errBody, null, 2));
+    const error = new Error(`Gemini API error: ${response.statusText}`);
     error.statusCode = 502;
     throw error;
   }
 
   const data    = await response.json();
-  const content = data.content?.[0]?.text;
-  if (!content) throw new Error("Empty response from Claude");
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!content) throw new Error("Empty response from Gemini");
+
+  console.log("Gemini raw response:", content.slice(0, 200));
 
   let parsed;
   try {
     const cleaned = content.replace(/```json|```/g, "").trim();
     parsed = JSON.parse(cleaned);
   } catch {
-    throw new Error("Could not parse Claude response as JSON");
+    throw new Error("Could not parse Gemini response as JSON");
   }
 
-  // ── FR-5.1 & FR-5.2: Missing fields fill karo ────────────────────────────
+  // ── FR-5.1 & FR-5.2: Fill missing fields using AI suggestions ────────────
   const updateData = {};
   const suggestions = parsed.missingFieldSuggestions || {};
 
-  // Sirf null/missing fields update karo — existing override mat karo
-  if (!prospect.primaryIndustry     && suggestions.primaryIndustry)
+  if (!prospect.primaryIndustry    && suggestions.primaryIndustry)
     updateData.primaryIndustry     = suggestions.primaryIndustry;
-  if (!prospect.annualRevenue        && suggestions.annualRevenue)
+  if (!prospect.annualRevenue       && suggestions.annualRevenue)
     updateData.annualRevenue       = suggestions.annualRevenue;
-  if (!prospect.noOfEmployees        && suggestions.noOfEmployees)
+  if (!prospect.noOfEmployees       && suggestions.noOfEmployees)
     updateData.noOfEmployees       = suggestions.noOfEmployees;
-  if (!prospect.techAdoptionProfile  && suggestions.techAdoptionProfile)
+  if (!prospect.techAdoptionProfile && suggestions.techAdoptionProfile)
     updateData.techAdoptionProfile = suggestions.techAdoptionProfile;
-  if (!prospect.financialCapacity    && suggestions.financialCapacity)
+  if (!prospect.financialCapacity   && suggestions.financialCapacity)
     updateData.financialCapacity   = suggestions.financialCapacity;
-  if (!prospect.marginPotential      && suggestions.marginPotential)
+  if (!prospect.marginPotential     && suggestions.marginPotential)
     updateData.marginPotential     = suggestions.marginPotential;
-  if (!prospect.strategicValue       && suggestions.strategicValue)
+  if (!prospect.strategicValue      && suggestions.strategicValue)
     updateData.strategicValue      = suggestions.strategicValue;
 
-  // ── FR-5.3: Buyer intent signal update karo ───────────────────────────────
+  // ── FR-5.3: Update buyer intent signal if available ───────────────────────
   if (parsed.buyerIntentSignal && !prospect.intentSignal) {
     updateData.intentSignal = parsed.buyerIntentSignal;
   }
 
-  // TechFit score update
   if (parsed.priorityScore !== undefined) {
     updateData.techFitScore = parsed.priorityScore;
   }
 
-  // Prospect update karo
   if (Object.keys(updateData).length > 0) {
     await prospectRepository.update(prospectId, updateData);
   }
 
-  // Enrichment record save karo
+  // ── Save enrichment record ────────────────────────────────────────────────
   const enrichment = await enrichmentRepository.create({
     prospectId,
-    enrichedBy:        userId,
+    enrichedBy:       "ai_module",
+    enrichedAt:        new Date(),
     techStack:         parsed.techStack         || [],
     intentSignals:     parsed.intentSignals     || [],
     strategicCategory: parsed.strategicCategory || null,
@@ -138,10 +139,10 @@ const enrichSingleProspect = async (prospectId, userId) => {
     entityId:    prospectId,
     description: `AI enrichment completed for "${prospect.accountName}"`,
     metadata: {
-      fieldsUpdated:   Object.keys(updateData),
-      intentSignals:   parsed.intentSignals || [],
-      priorityScore:   parsed.priorityScore,
-      icpMatch:        parsed.icpMatch,
+      fieldsUpdated: Object.keys(updateData),
+      intentSignals: parsed.intentSignals || [],
+      priorityScore: parsed.priorityScore,
+      icpMatch:      parsed.icpMatch,
     },
   });
 
@@ -154,7 +155,7 @@ const enrichmentService = {
     return await enrichSingleProspect(prospectId, userId);
   },
 
-  // Bulk enrich — background mein chalta hai
+  // Bulk enrichment — runs in background
   enrichBulk: async (prospectIds, userId) => {
     const results = { success: 0, failed: 0, errors: [] };
 

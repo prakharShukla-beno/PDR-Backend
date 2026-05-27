@@ -3,7 +3,7 @@ import interactionService from "./interaction.service.js";
 
 const interactionController = {
 
-  // POST /api/interactions — naya interaction log karo
+  // POST /api/interactions — log a new interaction
   create: async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -35,7 +35,7 @@ const interactionController = {
     }
   },
 
-  // GET /api/interactions/prospect/:prospectId — ek prospect ki saari interactions
+  // GET /api/interactions/prospect/:prospectId — all interactions for a prospect
   getByProspectId: async (req, res, next) => {
     try {
       const { page, limit } = req.query;
@@ -70,7 +70,7 @@ const interactionController = {
     }
   },
 
-  // PUT /api/interactions/:id — interaction update karo
+  // PUT /api/interactions/:id — update an interaction
   update: async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -93,7 +93,7 @@ const interactionController = {
     }
   },
 
-  // DELETE /api/interactions/:id — interaction delete karo
+  // DELETE /api/interactions/:id — delete an interaction
   delete: async (req, res, next) => {
     try {
       const result = await interactionService.delete(req.params.id);

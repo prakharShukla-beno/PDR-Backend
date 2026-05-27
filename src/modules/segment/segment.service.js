@@ -9,7 +9,7 @@ const segmentService = {
       createdBy: userId,
     });
 
-    // Match count calculate karo
+    // Calculate match count
     const count = await segmentService.countMatches(segment.filters);
     await segmentRepository.updateMatchCount(segment._id, count);
     segment.matchCount = count;
@@ -38,7 +38,7 @@ const segmentService = {
     return await segmentRepository.delete(id);
   },
 
-  // Filters se matching prospects count
+  // Count prospects matching the filters
   countMatches: async (filters = {}) => {
     const query = {};
     if (filters.industries?.length)      query.primaryIndustry = { $in: filters.industries };
@@ -52,10 +52,10 @@ const segmentService = {
     return await Prospect.countDocuments(query);
   },
 
-  // Matching prospects list
+  // List prospects that match the segment filters
   getMatchingProspects: async (id, page = 1, limit = 10) => {
     const segment = await segmentRepository.findById(id);
-    if (!segment) throw new Error("Segment nahi mila");
+    if (!segment) throw new Error("Segment not found");
 
     const query = {};
     const f = segment.filters;

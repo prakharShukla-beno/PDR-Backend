@@ -20,24 +20,24 @@ const importController = {
         });
       }
 
-      // ── Turant browser ko response do ─────────────────────────────────────
-      // Background mein process hoga — browser wait nahi karega
+      // ── Return response to the browser immediately
+      // Processing will continue in the background — the browser will not wait
       const filePath = req.file.path;
       const userId   = req.user._id;
 
-      // Background mein start karo — await mat karo
+      // Start processing in background — do not await
       importService.processExcelImport(filePath, userId)
         .then((result) => {
-          console.log(`✅ Import complete — ${result.successCount} of ${result.totalRows} rows`);
+          console.info(`Import complete: ${result.successCount} of ${result.totalRows} rows`);
         })
         .catch((err) => {
-          console.error("❌ Import background error:", err.message);
+          console.error("Import background error:", err.message);
         });
 
-      // Browser ko 202 Accepted — kaam shuru ho gaya
+      // Return 202 Accepted — work started in background
       return res.status(202).json({
         success: true,
-        message: "Import shuru ho gaya — background mein process ho raha hai. Notification aayegi jab complete ho.",
+        message: "Import started — processing in background. A notification will be sent when complete.",
         data: {
           fileName:   req.file.originalname,
           fileSize:   `${(req.file.size / 1024).toFixed(1)} KB`,
@@ -51,7 +51,7 @@ const importController = {
   },
 
   // GET /api/import/status/:importLogId
-  // Frontend poll kar sakta hai — progress check karne ke liye
+  // Frontend may poll this endpoint to check progress
   getStatus: async (req, res, next) => {
     try {
       const { importLogId } = req.params;
@@ -60,7 +60,7 @@ const importController = {
       if (!status) {
         return res.status(404).json({
           success: false,
-          message: "Import log nahi mila.",
+          message: "Import log not found.",
         });
       }
 

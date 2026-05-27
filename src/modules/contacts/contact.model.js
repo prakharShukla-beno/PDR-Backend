@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const contactSchema = new mongoose.Schema(
   {
     // ── Account Reference ────────────────────────────────────────────────────
-    // Apollo style — contact bina account ke bhi exist kar sakta hai
+    // Apollo style — contact can exist without an associated account
     accountId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Prospect",
@@ -16,10 +16,10 @@ const contactSchema = new mongoose.Schema(
     },
 
     // ── Denormalized Account Fields ──────────────────────────────────────────
-    // Ye fields account se copy hoti hain import ke time
-    // Taaki contact filter mein account JOIN na karna pade
-    // 1 lakh contacts pe bhi fast filter hoga
-    // Jab account update ho → ye fields bhi update karni hongi
+    // These fields are copied from the account at import time
+    // This avoids joining with account data when filtering contacts
+    // Filters remain performant even with large datasets (e.g., 100k contacts)
+    // These fields should be updated when the account is updated
     accountIndustry: {
       type: String,
       default: null,
@@ -107,14 +107,14 @@ const contactSchema = new mongoose.Schema(
     twitterUrl: { type: String, trim: true, default: null },
 
     // ── Contact Location ─────────────────────────────────────────────────────
-    // Ye contact ka apna location hai — accountCountry se alag ho sakta hai
+    // Contact's own location — may differ from the accountCountry
     country:  { type: String, trim: true, default: null },
     state:    { type: String, trim: true, default: null },
     city:     { type: String, trim: true, default: null },
     timeZone: { type: String, trim: true, default: null },
 
     // ── Computed Fields ──────────────────────────────────────────────────────
-    // Filter ke liye — has phone, has linkedin etc.
+    // Computed flags for filtering — hasPhone, hasLinkedIn, etc.
     hasEmail:    { type: Boolean, default: false },
     hasPhone:    { type: Boolean, default: false },
     hasLinkedIn: { type: Boolean, default: false },
@@ -129,18 +129,18 @@ const contactSchema = new mongoose.Schema(
 
     // ── System ───────────────────────────────────────────────────────────────
     isPrimary: { type: Boolean, default: false },
-    isLinked:  { type: Boolean, default: false }, // accountId se linked hai ya nahi
+    isLinked:  { type: Boolean, default: false }, // whether the contact is linked to an account
     source: {
       type: String,
       enum: ["excel", "csv", "manual", "account_import"],
-      // account_import = account Excel se aaya contact
+      // account_import = contact imported from an account Excel
       default: "manual",
     },
   },
   { timestamps: true }
 );
 
-// ─── Pre-save — computed fields auto-set karo ─────────────────────────────────
+// ─── Pre-save — set computed fields automatically ────────────────────────────
 contactSchema.pre("save", function () {
   this.hasEmail    = !!this.email;
   this.hasPhone    = !!(this.primaryPhone || this.primaryMobNo);
@@ -178,7 +178,7 @@ contactSchema.index({ city: 1 });
 contactSchema.index({ hasPhone: 1 });
 contactSchema.index({ hasLinkedIn: 1 });
 
-// Denormalized account field indexes — filter ke liye
+// Denormalized account field indexes — for filtering
 contactSchema.index({ accountIndustry: 1 });
 contactSchema.index({ accountCountry: 1 });
 contactSchema.index({ accountCity: 1 });

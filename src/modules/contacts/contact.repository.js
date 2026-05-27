@@ -6,11 +6,22 @@ const contactRepository = {
     return await Contact.create(data);
   },
 
-  insertMany: async (rows) => {
-    return await Contact.insertMany(rows, {
-      ordered:   false,
-      rawResult: true,
-    });
+  // Bulk insert — error handling added to support large batches
+  insertMany: async (rows, options = {}) => {
+    try {
+      const result = await Contact.insertMany(rows, {
+        ordered:   false,  // ek fail hone pe baki insert hote rahe
+        rawResult: true,
+        ...options,
+      });
+      return result;
+    } catch (err) {
+      // BulkWriteError — partial insert may have occurred; do not crash
+      if (err.name === "BulkWriteError" || err.result) {
+        return err.result;
+      }
+      throw err;
+    }
   },
 
   findAll: async ({ filter = {}, page = 1, limit = 10, sort = { createdAt: -1 } }) => {
@@ -40,7 +51,7 @@ const contactRepository = {
     });
   },
 
-  // ── Bulk update — auto-link ke liye ADD kiya ──────────────────────────────
+  // Bulk update — used for auto-linking contacts to accounts
   updateMany: async (filter, update) => {
     return await Contact.updateMany(filter, update);
   },

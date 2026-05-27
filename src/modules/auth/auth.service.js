@@ -44,24 +44,24 @@ const authService = {
   },
 
   // ── Forgot Password ───────────────────────────────────────────────────────────
-  // Step 1 — Email bhejo with reset link
+  // Step 1 — send an email with a password reset link
   forgotPassword: async ({ email }) => {
 
     const user = await User.findOne({ email: email.toLowerCase() });
 
-    // Security: chahe user mile ya nahi — same message do
-    // Taaki attacker ko pata na chale kaunsa email registered hai
+    // Security: always return the same message whether or not the user exists
+    // This prevents disclosure of which emails are registered
     if (!user) {
       return {
         message: "If this email is registered, a reset link has been sent.",
       };
     }
 
-    // Reset token generate karo aur DB mein save karo
+    // Generate a reset token and save it to the database
     const resetToken = user.createPasswordResetToken();
     await user.save({ validateBeforeSave: false });
 
-    // Frontend reset page ka URL
+    // Frontend reset page URL
     const resetURL = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
 
     try {
@@ -72,9 +72,9 @@ const authService = {
       });
     } catch (emailError) {
 
-      console.error("📧 EMAIL ERROR DETAILS:", emailError);
+      console.error("EMAIL ERROR DETAILS:", emailError);
 
-      // Email fail — token clear karo
+      // Email failed — clear token fields
       user.resetPasswordToken   = null;
       user.resetPasswordExpires = null;
       await user.save({ validateBeforeSave: false });
@@ -90,16 +90,16 @@ const authService = {
   },
 
   // ── Reset Password ────────────────────────────────────────────────────────────
-  // Step 2 — Token verify karo, password badlo
+  // Step 2 — verify the token and set the new password
   resetPassword: async ({ token, newPassword }) => {
 
-    // URL se aaya raw token → hash karo → DB se match karo
+    // Hash the raw token from the URL and match it against the database
     const hashedToken = crypto
       .createHash("sha256")
       .update(token)
       .digest("hex");
 
-    // User dhundo — token match + expire nahi hona chahiye
+    // Find a user where the token matches and has not expired
     const user = await User.findOne({
       resetPasswordToken:   hashedToken,
       resetPasswordExpires: { $gt: Date.now() },
@@ -111,13 +111,13 @@ const authService = {
       throw error;
     }
 
-    // Naya password set karo
+    // Set the new password
     user.password             = newPassword;
-    user.resetPasswordToken   = null; // one-time use — clear karo
+    user.resetPasswordToken   = null; // one-time use — clear token
     user.resetPasswordExpires = null;
     await user.save();
 
-    // Auto login — naya JWT do
+    // Auto login — return a new JWT
     const jwtToken = generateToken(user._id);
 
     return {

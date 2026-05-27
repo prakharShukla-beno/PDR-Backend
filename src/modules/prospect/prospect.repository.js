@@ -7,10 +7,10 @@ const prospectRepository = {
     return await Prospect.create(data);
   },
 
-  // Bulk insert — 1000-1000 rows ke chunks ke liye
+  // Bulk insert — for chunked inserts (e.g., 1000 rows per chunk)
   insertMany: async (rows, options = {}) => {
     try {
-      // accountNameLower manually set karo — hook pe depend mat karo
+      // Set accountNameLower manually — do not rely on model hooks
       const prepared = rows.map(r => ({
         ...r,
         accountNameLower: r.accountName
@@ -19,13 +19,13 @@ const prospectRepository = {
       }));
 
       const result = await Prospect.insertMany(prepared, {
-        ordered:   false,  // ek row fail ho toh baki insert hote rahe
-        rawResult: true,   // result mein insertedCount milega
+        ordered:   false,  // continue inserting remaining docs if one fails
+        rawResult: true,   // raw result contains insertedCount
         ...options,
       });
       return result;
     } catch (err) {
-      // BulkWriteError — partial insert hua hai
+      // BulkWriteError — partial insert may have occurred
       if (err.name === "BulkWriteError" || err.result) {
         return err.result;
       }

@@ -20,9 +20,9 @@ import "./modules/icp/icp.model.js";
 
 const app = express();
 
-// ── Fix: qs se array query params parse karo ───────────────────────────────────
-// countryInclude[]=India&countryInclude[]=USA → { countryInclude: ["India", "USA"] }
-// Without this, Express ignores [] brackets and returns strings instead of arrays
+// ── Fix: parse array query params using `qs` so brackets become arrays
+// Example: countryInclude[]=India&countryInclude[]=USA → { countryInclude: ["India", "USA"] }
+// Without this, Express would return bracketed params as strings instead of arrays
 app.set("query parser", (str) =>
   qs.parse(str, { allowDots: true, arrayLimit: 100 })
 );

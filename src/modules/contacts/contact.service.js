@@ -2,7 +2,7 @@ import contactRepository from "./contact.repository.js";
 import Prospect          from "../prospect/prospect.model.js";
 import campaignRepository from "../campaign/campaign.repository.js";
 
-// Helper — prospect se denormalized fields nikalo
+// Helper — extract denormalized account fields from a prospect
 const extractAccountFields = (prospect) => ({
   accountIndustry:      prospect.primaryIndustry || null,
   accountCountry:       prospect.country          || null,
@@ -25,7 +25,7 @@ const contactService = {
     let isLinked      = false;
     let accountFields = {};
 
-    // accountId diya hai → prospect fetch karo
+    // If accountId provided -> fetch the prospect
     if (accountId) {
       const prospect = await Prospect.findById(accountId).lean();
       if (prospect) {
@@ -33,7 +33,7 @@ const contactService = {
         accountFields = extractAccountFields(prospect);
       }
     }
-    // accountName diya hai → DB mein dhundo
+    // If accountName provided -> search in DB
     else if (data.accountName) {
       const prospect = await Prospect.findOne({
         accountName: { $regex: new RegExp(`^${data.accountName.trim()}$`, "i") },
@@ -50,7 +50,7 @@ const contactService = {
       ...data,
       accountId,
       isLinked,
-      ...accountFields,   // accountIndustry, accountCountry etc. set honge
+      ...accountFields,   // accountIndustry, accountCountry etc. will be set
       source: data.source || "manual",
     });
   },

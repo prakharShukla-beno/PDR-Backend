@@ -25,18 +25,18 @@ const contactImportController = {
       const filePath = req.file.path;
       const userId   = req.user._id;
 
-      // Background mein process karo
+      // Process in background
       contactImportService.processContactImport(filePath, userId)
         .then((result) => {
-          console.log(`✅ Contact import complete — ${result.successCount} of ${result.totalRows}`);
+          console.info(`Contact import complete: ${result.successCount} of ${result.totalRows}`);
         })
         .catch((err) => {
-          console.error("❌ Contact import error:", err.message);
+          console.error("Contact import error:", err.message);
         });
 
       return res.status(202).json({
         success: true,
-        message: "Contact import shuru ho gaya — background mein process ho raha hai. Notification aayegi jab complete ho.",
+        message: "Contact import started — processing in background. A notification will be sent when complete.",
         data: {
           fileName:   req.file.originalname,
           fileSize:   `${(req.file.size / 1024).toFixed(1)} KB`,

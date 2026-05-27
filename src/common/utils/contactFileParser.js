@@ -5,7 +5,7 @@ import { parse } from "csv-parse/sync";
 const { readFile, utils } = pkg;
 
 // ── Column mapping ─────────────────────────────────────────────────────────────
-// Jitne bhi possible column names ho sakte hain — sab cover kiye hain
+// Cover common variations of possible column names
 const CONTACT_FIELD_MAP = {
   // Account link
   "account_name":              "accountName",
@@ -26,7 +26,7 @@ const CONTACT_FIELD_MAP = {
   "last name":                 "lastName",
   "lastname":                  "lastName",
   "lname":                     "lastName",
-  "name":                      "firstName",   // single name field → firstName mein
+  "name":                      "firstName",   // single name field → use as firstName
   "full name":                 "firstName",
   "full_name":                 "firstName",
   "contact name":              "firstName",
@@ -184,21 +184,21 @@ const mapRowToContact = (rawRow) => {
 };
 
 // ── Validate row ──────────────────────────────────────────────────────────────
-// LOOSE VALIDATION — 1 lakh records ke liye
-// Sirf clearly invalid rows reject karo
+// LOOSE VALIDATION — designed for large datasets (e.g., 100k rows)
+// Reject only clearly invalid rows
 const validateContactRow = (row, rowNumber) => {
   const errors = [];
 
-  // ── Row bilkul empty hai — skip karo ─────────────────────────────────────
+  // ── Row completely empty — skip
   const hasAnyData = Object.values(row).some(v => v && String(v).trim());
   if (!hasAnyData) {
     errors.push(`Row ${rowNumber}: Empty row`);
     return errors;
   }
 
-  // ── Email format — sirf agar email field hai aur clearly galat hai ────────
+  // ── Email format — only if the email field exists and is clearly invalid
   if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) {
-    // Warning only — reject mat karo, sirf null kar do
+    // Warning only — do not reject the row, set the value to null
     row.email = null;
   }
 
@@ -206,15 +206,15 @@ const validateContactRow = (row, rowNumber) => {
     row.secondaryEmail = null;
   }
 
-  // ── FunctionalDomain — agar value hai aur match nahi karti → null karo ────
-  // Reject mat karo — bahut alag-alag formats aate hain real data mein
+  // ── FunctionalDomain — if a value exists but does not match, set to null
+  // Do not reject the row — real-world data contains many formats
   if (row.functionalDomain && !FUNCTIONAL_DOMAINS.includes(row.functionalDomain)) {
     row.functionalDomain = null; // invalid value → null, row save hogi
   }
 
-  // NOTE: accountName aur email/phone REQUIRED nahi hain ab
-  // Real world data mein bahut gaps hote hain — sab save karo
-  // isLinked: false rahega agar accountName nahi mila
+  // NOTE: accountName and email/phone are not required
+  // Real-world data often has gaps — save the row where possible
+  // isLinked will be false if accountName is not found
 
   return errors;
 };
@@ -234,7 +234,7 @@ export const processContactFile = (filePath) => {
     const errors    = validateContactRow(mappedRow, rowNumber);
 
     if (errors.length > 0) {
-      // Sirf completely empty rows reject hongi
+      // Only completely empty rows will be rejected
       errorDetails.push(...errors);
     } else {
       validRows.push(mappedRow);

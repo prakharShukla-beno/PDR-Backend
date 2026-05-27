@@ -8,7 +8,7 @@ const prospectSchema = new mongoose.Schema(
       required: [true, "Account name is required"],
       trim: true,
     },
-    // lowercase copy — exact match ke liye (regex nahi)
+    // Lowercase copy — for exact matching (avoid regex)
     accountNameLower: {
       type: String,
       trim: true,
@@ -146,8 +146,8 @@ const prospectSchema = new mongoose.Schema(
     },
 
     // ── Relational References ────────────────────────────────────────────────
-    // contacts[] array HATA DIYA — ab Contact collection alag hai
-    // Account detail page pe: GET /api/contacts?accountId=xxx
+    // contacts[] array removed — contacts are stored in the separate Contact collection
+    // Account detail page: GET /api/contacts?accountId=xxx
     importLogId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ImportLog",

@@ -48,8 +48,8 @@ userSchema.methods.comparePassword = async function (enteredPassword) {
 };
 
 // Generate reset token
-// Raw token → email mein jaayega
-// Hashed token → DB mein store hoga
+// Raw token -> will be sent via email
+// Hashed token -> stored in the database
 userSchema.methods.createPasswordResetToken = function () {
   const resetToken = crypto.randomBytes(32).toString("hex");
 

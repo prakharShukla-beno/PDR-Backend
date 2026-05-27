@@ -98,7 +98,7 @@ const campaignController = {
     try {
       const campaign = await campaignService.getById(req.params.id);
       if (!campaign) {
-        return res.status(404).json({ success: false, message: "Campaign nahi mila" });
+        return res.status(404).json({ success: false, message: "Campaign not found" });
       }
 
       res.status(200).json({
@@ -112,8 +112,8 @@ const campaignController = {
           clickCount:   campaign.stats.clickCount,
           replyCount:   campaign.stats.replyCount,
           conversions:  campaign.stats.conversions,
-          openRate:     campaign.openRate,   // virtual — % mein
-          ctr:          campaign.ctr,        // virtual — % mein
+          openRate:     campaign.openRate,   // virtual — percentage
+          ctr:          campaign.ctr,        // virtual — percentage
           totalProspects: campaign.prospectIds.length,
         },
       });
@@ -121,7 +121,7 @@ const campaignController = {
   },
 
   // ── PUT /api/campaigns/:id/stats ───────────────────────────────────────────
-  // Jab email bheja jaye, open ho, click ho — frontend se update karo
+  // When an email is sent/opened/clicked, the frontend should call to update stats
   updateStats: async (req, res, next) => {
     try {
       const { sentCount, openCount, clickCount, replyCount, conversions } = req.body;
@@ -132,7 +132,7 @@ const campaignController = {
 
       res.status(200).json({
         success: true,
-        message: "Stats update ho gaye",
+        message: "Stats updated successfully",
         data: {
           stats:    updated.stats,
           openRate: updated.openRate,

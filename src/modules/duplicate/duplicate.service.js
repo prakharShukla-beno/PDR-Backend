@@ -99,15 +99,15 @@ const duplicateService = {
       throw error;
     }
 
-    // ── Loser ke contacts winner mein migrate karo ─────────────────────────
-    // Contact collection se (naya architecture)
+    // ── Migrate loser's contacts into the winner's account
+    // Using the Contact collection (new architecture)
     await contactRepository.updateMany(
       { accountId: loser._id },
       {
         $set: {
           accountId:   winner._id,
           accountName: winner.accountName,
-          // Denormalized fields bhi update karo
+          // Also update denormalized account fields
           accountIndustry:      winner.primaryIndustry  || null,
           accountCountry:       winner.country          || null,
           accountCity:          winner.hqLocationCity   || null,
@@ -119,17 +119,17 @@ const duplicateService = {
       }
     );
 
-    // ── Loser ke campaignIds winner mein add karo ──────────────────────────
+    // ── Add loser's campaignIds to the winner
     if (loser.campaignIds && loser.campaignIds.length > 0) {
       await prospectRepository.update(winner._id, {
         $addToSet: { campaignIds: { $each: loser.campaignIds } },
       });
     }
 
-    // ── Loser delete karo ──────────────────────────────────────────────────
+    // ── Delete the loser prospect
     await prospectRepository.delete(loser._id);
 
-    // ── Duplicate record update karo ───────────────────────────────────────
+    // ── Update the duplicate record
     const updated = await duplicateRepository.update(id, {
       status:     "merged",
       reviewedBy: userId,

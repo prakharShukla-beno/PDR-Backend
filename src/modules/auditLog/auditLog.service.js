@@ -2,14 +2,14 @@ import auditLogRepository from "./auditLog.repository.js";
 
 const auditLogService = {
 
-  // Log entry create karo — kisi bhi module se call kar sakte ho
+  // Create a log entry — callable from any module
   log: async ({ userId, action, entity, entityId, description, metadata, ipAddress }) => {
     try {
       return await auditLogRepository.create({
         userId, action, entity, entityId, description, metadata, ipAddress,
       });
     } catch (err) {
-      // Audit log fail hone se main operation nahi rukna chahiye
+      // Audit log failure should not stop the main operation
       console.error("Audit log error:", err.message);
     }
   },

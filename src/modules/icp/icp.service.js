@@ -52,7 +52,7 @@ const icpService = {
     return { message: "ICP profile deleted successfully" };
   },
 
-  // ── ICP criteria se matching prospects ──────────────────────────────────────
+  // ── Match prospects by ICP criteria ───────────────────────────────────────
   matchProspects: async (id, { page = 1, limit = 10 }) => {
     const profile = await icpRepository.findById(id);
     if (!profile) {
@@ -88,7 +88,7 @@ const icpService = {
       Prospect.countDocuments(filter),
     ]);
 
-    // Har prospect ke contact count bhi do
+    // Also return contact counts for each prospect
     const prospectIds = prospects.map(p => p._id);
     const contactCounts = await Contact.aggregate([
       { $match: { accountId: { $in: prospectIds } } },
@@ -114,8 +114,8 @@ const icpService = {
     };
   },
 
-  // ── FR-6.2: Buyer persona — best POC suggest karo ───────────────────────────
-  // FIX: contacts[] embedded se Contact collection pe
+  // ── Buyer persona — suggest best POC (FR-6.2)
+  // FIX: use Contact collection instead of embedded contacts[]
   matchBuyerPersona: async (id, { page = 1, limit = 10 }) => {
     const profile = await icpRepository.findById(id);
     if (!profile) {
@@ -136,11 +136,11 @@ const icpService = {
       throw error;
     }
 
-    // ── Contact collection se filter karo — naya architecture ─────────────
+    // ── Filter using Contact collection — new architecture
     const contactFilter = { isLinked: true };
 
     if (persona.targetSeniorities.length > 0) {
-      // functionalDomain = department jaisa hai hamare schema mein
+      // functionalDomain corresponds to department in our schema
       contactFilter.functionalDomain = { $in: persona.targetDepartments };
     }
     if (persona.targetDesignations.length > 0) {
@@ -151,7 +151,7 @@ const icpService = {
 
     const skip = (Number(page) - 1) * Number(limit);
 
-    // Contact collection se matching contacts + account info
+    // Fetch matching contacts from Contact collection with account info
     const [contacts, total] = await Promise.all([
       Contact.find(contactFilter)
         .populate("accountId", "accountName website primaryIndustry country techFitScore salesPriority clvRanking")
@@ -161,7 +161,7 @@ const icpService = {
       Contact.countDocuments(contactFilter),
     ]);
 
-    // Account ke hisaab se group karo — best contact per account
+    // Group by account — determine best contact per account
     const accountMap = {};
     contacts.forEach(contact => {
       const accId = contact.accountId?._id?.toString();

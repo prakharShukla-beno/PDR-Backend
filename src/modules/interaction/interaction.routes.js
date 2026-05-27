@@ -50,11 +50,11 @@ const updateValidation = [
     .isISO8601().withMessage("interactedAt must be a valid date (ISO 8601)"),
 ];
 
-// POST   /api/interactions                          — naya interaction log karo
-// GET    /api/interactions/prospect/:prospectId     — prospect ki saari interactions
-// GET    /api/interactions/:id                      — single interaction
-// PUT    /api/interactions/:id                      — update karo
-// DELETE /api/interactions/:id                      — delete karo
+// POST   /api/interactions                          — log a new interaction
+// GET    /api/interactions/prospect/:prospectId     — get all interactions for a prospect
+// GET    /api/interactions/:id                      — get single interaction
+// PUT    /api/interactions/:id                      — update an interaction
+// DELETE /api/interactions/:id                      — delete an interaction
 
 router.post("/",                              createValidation, interactionController.create);
 router.get("/prospect/:prospectId",           interactionController.getByProspectId);

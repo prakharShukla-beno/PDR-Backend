@@ -7,10 +7,10 @@ const router = Router();
 // All duplicate routes require login
 router.use(authMiddleware);
 
-// GET /api/duplicates              — saare pairs (?status=pending/merged/dismissed)
+// GET /api/duplicates              — all pairs (?status=pending/merged/dismissed)
 // GET /api/duplicates/:id          — single pair full detail
-// PUT /api/duplicates/:id/dismiss  — dismiss karo (dono alag rakho)
-// PUT /api/duplicates/:id/merge    — merge karo (prospectId2 → prospectId1)
+// PUT /api/duplicates/:id/dismiss  — dismiss (keep both records separate)
+// PUT /api/duplicates/:id/merge    — merge (merge prospectId2 into prospectId1)
 
 router.get("/",              duplicateController.getAll);
 router.get("/:id",           duplicateController.getById);

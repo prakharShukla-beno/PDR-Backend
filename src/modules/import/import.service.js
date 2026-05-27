@@ -7,6 +7,7 @@ import notificationService from "../notification/notification.service.js";
 import auditLogService from "../auditLog/auditLog.service.js";
 import contactRepository from "../contacts/contact.repository.js";
 import Prospect from "../prospect/prospect.model.js";
+import Contact from "../contacts/contact.model.js";
 
 const CHUNK_SIZE = 1000;
 
@@ -25,23 +26,19 @@ const extractAccountFields = (prospect) => ({
   accountWebsite:       prospect.website           || null,
 });
 
-// ─── Helper: Safe insertMany — 1 row se 1 lakh tak handle karo ───────────────
-// ordered: false → ek row fail hone pe baki rows insert hoti rehti hain
+// ─── Helper: Safe insertMany ──────────────────────────────────────────────────
 const safeInsertMany = async (repository, docs, chunkNum) => {
   if (!docs || docs.length === 0) return 0;
   try {
     await repository.insertMany(docs, { ordered: false });
-    // ordered: false pe success count = docs.length (partial bhi ho sakta hai)
     console.log(`✅ Chunk ${chunkNum}: ${docs.length} rows inserted`);
     return docs.length;
   } catch (err) {
-    // BulkWriteError — kuch rows insert hue, kuch nahi
     if (err.name === "BulkWriteError" || err.code === 11000) {
       const inserted = err.result?.nInserted ?? err.result?.insertedCount ?? 0;
-      console.warn(`⚠️  Chunk ${chunkNum}: ${inserted}/${docs.length} inserted (partial — duplicates/errors skip kiye)`);
+      console.warn(`⚠️  Chunk ${chunkNum}: ${inserted}/${docs.length} inserted (partial)`);
       return inserted;
     }
-    // Poora chunk fail
     console.error(`❌ Chunk ${chunkNum} error:`, err.message);
     return 0;
   }
@@ -50,7 +47,7 @@ const safeInsertMany = async (repository, docs, chunkNum) => {
 const importService = {
 
   // ===========================================================================
-  // ACCOUNT EXCEL IMPORT
+  // ACCOUNT EXCEL IMPORT — Upsert: accountName/website pe match
   // ===========================================================================
   processExcelImport: async (filePath, userId) => {
 
@@ -73,7 +70,7 @@ const importService = {
       status:       "processing",
     });
 
-    // ── Early exit — koi valid row nahi ───────────────────────────────────
+    // ── Early exit ─────────────────────────────────────────────────────────
     if (!validRows || validRows.length === 0) {
       await importLogRepository.update(importLog._id, {
         status:      "failed",
@@ -91,7 +88,7 @@ const importService = {
       };
     }
 
-    // ── Duplicate check ────────────────────────────────────────────────────
+    // ── Existing prospects check ───────────────────────────────────────────
     const accountNames = validRows.map(r => r.accountName).filter(Boolean);
     const websites     = validRows.map(r => r.website).filter(Boolean);
 
@@ -109,61 +106,90 @@ const importService = {
       });
     }
 
-    const existingNames    = new Set((existingProspects.prospects || []).map(p => p.accountName?.toLowerCase()));
-    const existingWebsites = new Set((existingProspects.prospects || []).map(p => p.website?.toLowerCase()));
-
-    const preparedRows  = [];
-    const duplicateRows = [];
-
-    for (const row of validRows) {
-      const isDuplicate =
-        (row.accountName && existingNames.has(row.accountName.toLowerCase())) ||
-        (row.website     && existingWebsites.has(row.website.toLowerCase()));
-
-      const { contacts, ...prospectData } = row;
-
-      preparedRows.push({
-        ...prospectData,
-        isDuplicate,
-        source:      "excel",
-        importLogId: importLog._id,
-      });
-
-      duplicateRows.push(isDuplicate ? { row, contacts } : null);
+    // Fast lookup map
+    const existingMap = {};
+    for (const p of (existingProspects.prospects || [])) {
+      if (p.accountName) existingMap[p.accountName.toLowerCase()] = p;
+      if (p.website)     existingMap[p.website.toLowerCase()]     = p;
     }
 
-    console.log(`📦 Prepared rows: ${preparedRows.length}, Duplicates: ${duplicateRows.filter(Boolean).length}`);
+    const newRows    = []; // fresh insert
+    const upsertRows = []; // existing update
 
-    // ── Chunked insert — Prospects ─────────────────────────────────────────
+    for (const row of validRows) {
+      const { contacts, ...prospectData } = row;
+      const key     = row.accountName?.toLowerCase();
+      const webKey  = row.website?.toLowerCase();
+      const existing = existingMap[key] || existingMap[webKey] || null;
+
+      if (existing) {
+        upsertRows.push({ prospectData, existing, contacts });
+      } else {
+        newRows.push({
+          ...prospectData,
+          isDuplicate: false,
+          source:      "excel",
+          importLogId: importLog._id,
+        });
+      }
+    }
+
+    console.log(`📦 New: ${newRows.length} | Update existing: ${upsertRows.length}`);
+
+    // ── Step 1: Naye rows insert ───────────────────────────────────────────
     let successCount = 0;
     const insertErrors = [];
 
-    for (let i = 0; i < preparedRows.length; i += CHUNK_SIZE) {
-      const chunk    = preparedRows.slice(i, i + CHUNK_SIZE);
+    for (let i = 0; i < newRows.length; i += CHUNK_SIZE) {
+      const chunk    = newRows.slice(i, i + CHUNK_SIZE);
       const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
-
       const inserted = await safeInsertMany(prospectRepository, chunk, chunkNum);
       successCount  += inserted;
-
       if (inserted < chunk.length) {
         insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
       }
-
-      // Progress update
       await importLogRepository.update(importLog._id, { successCount });
     }
 
-    // ── Contacts — Account se match karke insert karo ─────────────────────
-    const contactsToInsert = [];
+    // ── Step 2: Existing update (upsert) ──────────────────────────────────
+    let updatedCount = 0;
+    for (const { prospectData, existing } of upsertRows) {
+      try {
+        await Prospect.findByIdAndUpdate(
+          existing._id,
+          {
+            $set: {
+              ...prospectData,
+              accountNameLower: prospectData.accountName?.toLowerCase().trim() || null,
+              source:           "excel",
+            },
+          },
+          { runValidators: false }
+        );
+        updatedCount++;
+      } catch (err) {
+        insertErrors.push(`Update failed: ${prospectData.accountName} — ${err.message}`);
+      }
+    }
 
-    // Ek baar mein saare inserted prospects fetch karo — N+1 avoid karo
+    if (updatedCount > 0) {
+      successCount += updatedCount;
+      console.log(`🔄 Updated existing: ${updatedCount} prospects`);
+      await importLogRepository.update(importLog._id, { successCount });
+    }
+
+    // ── Step 3: Contacts insert/upsert ────────────────────────────────────
+    const contactsToUpsert = []; // email hai — upsert
+    const contactsToInsert = []; // email nahi — insert
+
+    // Saare prospects fetch karo (naye + updated)
     const insertedProspectMap = {};
     if (accountNames.length > 0) {
-      const insertedProspects = await Prospect.find({
+      const allProspects = await Prospect.find({
         accountNameLower: { $in: accountNames.map(n => n.toLowerCase()) },
       }).select("_id accountName accountNameLower primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal website").lean();
 
-      for (const p of insertedProspects) {
+      for (const p of allProspects) {
         if (p.accountNameLower) insertedProspectMap[p.accountNameLower] = p;
       }
     }
@@ -181,29 +207,50 @@ const importService = {
       for (const contact of contacts) {
         if (!contact.name && !contact.email && !contact.phone) continue;
 
-        const nameParts = (contact.name || "").trim().split(" ");
-        contactsToInsert.push({
-          accountId:   matchedProspect._id,
-          accountName: row.accountName,
-          isLinked:    true,
+        const nameParts   = (contact.name || "").trim().split(" ");
+        const contactData = {
+          accountId:         matchedProspect._id,
+          accountName:       row.accountName,
+          isLinked:          true,
           ...accountFields,
-          firstName:         nameParts[0]                   || null,
-          lastName:          nameParts.slice(1).join(" ")   || null,
-          standardizedRoles: contact.designation            || null,
-          functionalDomain:  contact.department             || null,
-          email:             contact.email                  || null,
-          primaryPhone:      contact.phone                  || null,
-          secondaryPhone:    contact.phone2                 || null,
-          linkedIn:          contact.linkedIn               || null,
-          isPrimary:         contact.isPrimary              ?? true,
+          firstName:         nameParts[0]                 || null,
+          lastName:          nameParts.slice(1).join(" ") || null,
+          standardizedRoles: contact.designation          || null,
+          functionalDomain:  contact.department           || null,
+          email:             contact.email                || null,
+          primaryPhone:      contact.phone                || null,
+          secondaryPhone:    contact.phone2               || null,
+          linkedIn:          contact.linkedIn             || null,
+          isPrimary:         contact.isPrimary            ?? true,
           source:            "account_import",
           importLogId:       importLog._id,
-        });
+        };
+
+        if (contact.email) {
+          contactsToUpsert.push(contactData);
+        } else {
+          contactsToInsert.push(contactData);
+        }
       }
     }
 
-    // Contacts chunked insert
     let contactsSaved = 0;
+
+    // Email wale — upsert
+    for (const c of contactsToUpsert) {
+      try {
+        await Contact.findOneAndUpdate(
+          { email: c.email.toLowerCase() },
+          { $set: c },
+          { upsert: true, runValidators: false }
+        );
+        contactsSaved++;
+      } catch (err) {
+        console.error("❌ Contact upsert error:", err.message);
+      }
+    }
+
+    // Email nahi — insert
     for (let i = 0; i < contactsToInsert.length; i += CHUNK_SIZE) {
       const chunk    = contactsToInsert.slice(i, i + CHUNK_SIZE);
       const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
@@ -213,7 +260,7 @@ const importService = {
     // ── Unlinked contacts auto-link ────────────────────────────────────────
     if (accountNames.length > 0) {
       try {
-        for (const [key, prospect] of Object.entries(insertedProspectMap)) {
+        for (const [, prospect] of Object.entries(insertedProspectMap)) {
           const fields = extractAccountFields(prospect);
           await contactRepository.updateMany(
             { accountName: { $regex: `^${prospect.accountName}$`, $options: "i" }, isLinked: false },
@@ -226,38 +273,11 @@ const importService = {
       }
     }
 
-    // ── Duplicate log ──────────────────────────────────────────────────────
-    for (const dup of duplicateRows.filter(Boolean)) {
-      try {
-        const existing = (existingProspects.prospects || []).find(
-          p =>
-            p.accountName?.toLowerCase() === dup.row.accountName?.toLowerCase() ||
-            p.website?.toLowerCase()     === dup.row.website?.toLowerCase()
-        );
-        const key      = dup.row.accountName?.toLowerCase();
-        const inserted = key ? insertedProspectMap[key] : null;
-
-        if (existing && inserted) {
-          const matchFields = [];
-          if (dup.row.accountName) matchFields.push("accountName");
-          if (dup.row.website)     matchFields.push("website");
-          await duplicateRepository.create({
-            prospectId1: existing._id,
-            prospectId2: inserted._id,
-            matchFields,
-            status:      "pending",
-          });
-        }
-      } catch (err) {
-        insertErrors.push(`Duplicate log failed: ${dup.row.accountName}`);
-      }
-    }
-
     // ── Final status ───────────────────────────────────────────────────────
     const allErrors   = [...errorDetails, ...insertErrors];
     const finalStatus =
-      successCount === 0              ? "failed"    :
-      successCount < validRows.length ? "partial"   :
+      successCount === 0              ? "failed"  :
+      successCount < validRows.length ? "partial" :
       "completed";
 
     await importLogRepository.update(importLog._id, {
@@ -272,12 +292,12 @@ const importService = {
     await notificationService.create({
       userId,
       type:          "import_complete",
-      message:       `Account import ${finalStatus} — ${successCount} of ${totalRows} imported. ${contactsSaved} contacts saved.`,
+      message:       `Account import ${finalStatus} — ${newRows.length} new, ${updatedCount} updated. ${contactsSaved} contacts saved.`,
       refId:         importLog._id,
       refCollection: "importLogs",
     });
 
-    console.log(`🏁 Import done — ${successCount} of ${totalRows} rows | Contacts: ${contactsSaved}`);
+    console.log(`🏁 Import done — New: ${newRows.length} | Updated: ${updatedCount} | Contacts: ${contactsSaved}`);
 
     await auditLogService.log({
       userId,
@@ -285,14 +305,24 @@ const importService = {
       entity:      "Import",
       entityId:    importLog._id,
       description: `Account import ${finalStatus} — ${successCount} of ${totalRows} rows`,
-      metadata:    { successCount, failedCount: allErrors.length, contactsSaved },
+      metadata:    { successCount, newCount: newRows.length, updatedCount, failedCount: allErrors.length, contactsSaved },
     });
 
-    return { importLogId: importLog._id, totalRows, successCount, failedCount: allErrors.length, contactsSaved, errorDetails: allErrors, status: finalStatus };
+    return {
+      importLogId:   importLog._id,
+      totalRows,
+      successCount,
+      newCount:      newRows.length,
+      updatedCount,
+      failedCount:   allErrors.length,
+      contactsSaved,
+      errorDetails:  allErrors,
+      status:        finalStatus,
+    };
   },
 
   // ===========================================================================
-  // CONTACT EXCEL IMPORT
+  // CONTACT EXCEL IMPORT — Upsert: email pe match
   // ===========================================================================
   processContactImport: async (filePath, userId) => {
 
@@ -315,14 +345,13 @@ const importService = {
       status:       "processing",
     });
 
-    // Early exit
     if (!validRows || validRows.length === 0) {
       await importLogRepository.update(importLog._id, { status: "failed", failedCount: errorDetails.length });
       try { fs.unlinkSync(filePath); } catch (_) {}
       return { importLogId: importLog._id, totalRows, successCount: 0, failedCount: errorDetails.length, linkedCount: 0, unlinkedCount: 0, errorDetails, status: "failed" };
     }
 
-    // ── Unique accountNames — ek baar mein saab fetch karo ─────────────────
+    // ── Account map ────────────────────────────────────────────────────────
     const uniqueAccountNames = [...new Set(validRows.map(r => r.accountName?.trim()).filter(Boolean))];
     const accountMap = {};
 
@@ -337,55 +366,96 @@ const importService = {
       console.log(`✅ Accounts matched: ${existingAccounts.length} of ${uniqueAccountNames.length}`);
     }
 
+    // ── Existing contacts check — email pe ────────────────────────────────
+    const emails = validRows.map(r => r.email?.toLowerCase()).filter(Boolean);
+    const existingEmailSet = new Set();
+
+    if (emails.length > 0) {
+      const existingContacts = await Contact.find({
+        email: { $in: emails },
+      }).select("email").lean();
+
+      for (const c of existingContacts) {
+        if (c.email) existingEmailSet.add(c.email.toLowerCase());
+      }
+      console.log(`📧 Existing contacts by email: ${existingEmailSet.size}`);
+    }
+
     // ── Rows prepare ───────────────────────────────────────────────────────
-    const preparedRows = [];
-    let linkedCount    = 0;
-    let unlinkedCount  = 0;
+    const newRows    = [];
+    const upsertRows = [];
+    let linkedCount   = 0;
+    let unlinkedCount = 0;
 
     for (const row of validRows) {
-      const nameKey   = row.accountName?.trim().toLowerCase();
-      const prospect  = nameKey ? accountMap[nameKey] : null;
+      const nameKey       = row.accountName?.trim().toLowerCase();
+      const prospect      = nameKey ? accountMap[nameKey] : null;
       const accountFields = prospect ? extractAccountFields(prospect) : {};
 
-      preparedRows.push({
+      const preparedRow = {
         ...row,
         accountId:   prospect ? prospect._id : null,
         accountName: row.accountName?.trim() || null,
         isLinked:    !!prospect,
         ...accountFields,
-        source:      "excel",
+        source:      filePath.toLowerCase().endsWith(".csv") ? "csv" : "excel",
         importLogId: importLog._id,
-      });
+      };
 
       if (prospect) linkedCount++;
       else          unlinkedCount++;
+
+      const emailKey = row.email?.toLowerCase();
+      if (emailKey && existingEmailSet.has(emailKey)) {
+        upsertRows.push(preparedRow); // email match — update
+      } else {
+        newRows.push(preparedRow);    // naya — insert
+      }
     }
 
-    console.log(`📦 Prepared: ${preparedRows.length} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
+    console.log(`📦 New: ${newRows.length} | Update existing: ${upsertRows.length} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
 
-    // ── Chunked insertMany ─────────────────────────────────────────────────
+    // ── Step 1: Naye contacts insert ───────────────────────────────────────
     let successCount = 0;
     const insertErrors = [];
 
-    for (let i = 0; i < preparedRows.length; i += CHUNK_SIZE) {
-      const chunk    = preparedRows.slice(i, i + CHUNK_SIZE);
+    for (let i = 0; i < newRows.length; i += CHUNK_SIZE) {
+      const chunk    = newRows.slice(i, i + CHUNK_SIZE);
       const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
-
       const inserted = await safeInsertMany(contactRepository, chunk, chunkNum);
       successCount  += inserted;
-
       if (inserted < chunk.length) {
         insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
       }
+      await importLogRepository.update(importLog._id, { successCount });
+    }
 
+    // ── Step 2: Existing contacts update — email pe ────────────────────────
+    let updatedCount = 0;
+    for (const row of upsertRows) {
+      try {
+        await Contact.findOneAndUpdate(
+          { email: row.email?.toLowerCase() },
+          { $set: row },
+          { runValidators: false }
+        );
+        updatedCount++;
+      } catch (err) {
+        insertErrors.push(`Contact update failed: ${row.email} — ${err.message}`);
+      }
+    }
+
+    if (updatedCount > 0) {
+      successCount += updatedCount;
+      console.log(`🔄 Updated existing contacts: ${updatedCount}`);
       await importLogRepository.update(importLog._id, { successCount });
     }
 
     // ── Final status ───────────────────────────────────────────────────────
     const allErrors   = [...errorDetails, ...insertErrors];
     const finalStatus =
-      successCount === 0              ? "failed"    :
-      successCount < validRows.length ? "partial"   :
+      successCount === 0              ? "failed"  :
+      successCount < validRows.length ? "partial" :
       "completed";
 
     await importLogRepository.update(importLog._id, { successCount, failedCount: allErrors.length, errorDetails: allErrors, status: finalStatus });
@@ -395,14 +465,25 @@ const importService = {
     await notificationService.create({
       userId,
       type:    "import_complete",
-      message: `Contact import ${finalStatus} — ${successCount} of ${totalRows} imported. Linked: ${linkedCount}, Unlinked: ${unlinkedCount}`,
+      message: `Contact import ${finalStatus} — ${newRows.length} new, ${updatedCount} updated. Linked: ${linkedCount}, Unlinked: ${unlinkedCount}`,
       refId:         importLog._id,
       refCollection: "importLogs",
     });
 
-    console.log(`🏁 Contact import done — ${successCount}/${totalRows} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
+    console.log(`🏁 Contact import done — New: ${newRows.length} | Updated: ${updatedCount} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
 
-    return { importLogId: importLog._id, totalRows, successCount, failedCount: allErrors.length, linkedCount, unlinkedCount, errorDetails: allErrors, status: finalStatus };
+    return {
+      importLogId:  importLog._id,
+      totalRows,
+      successCount,
+      newCount:     newRows.length,
+      updatedCount,
+      failedCount:  allErrors.length,
+      linkedCount,
+      unlinkedCount,
+      errorDetails: allErrors,
+      status:       finalStatus,
+    };
   },
 
   // ===========================================================================
