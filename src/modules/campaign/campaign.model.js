@@ -7,21 +7,16 @@ const campaignSchema = new mongoose.Schema(
       required: [true, "Campaign name is required"],
       trim: true,
     },
-    description: {
-      type: String,
-      trim: true,
-      default: null,
-    },
-    promptUsed: {
-      type: String,
-      default: null,
-    },
-    prospectIds: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Prospect",
-      },
+    description: { type: String, trim: true, default: null },
+    promptUsed:  { type: String, default: null },
+
+    // ── Apollo style — Contacts in campaign ───────────────────────────────────
+    // prospectIds → REMOVED (accounts add karna galat tha)
+    // contactIds  → Contacts directly campaign mein jaate hain
+    contactIds: [
+      { type: mongoose.Schema.Types.ObjectId, ref: "Contact" },
     ],
+
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -33,7 +28,7 @@ const campaignSchema = new mongoose.Schema(
       default: "draft",
     },
 
-    // ── Performance Stats ──────────────────────────────────────────────────────
+    // ── Performance Stats — FR-9.3 ────────────────────────────────────────────
     stats: {
       sentCount:   { type: Number, default: 0 },
       openCount:   { type: Number, default: 0 },
@@ -45,20 +40,28 @@ const campaignSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Virtual — calculate open rate percentage on the fly
+// Virtual — openRate %
 campaignSchema.virtual("openRate").get(function () {
   if (!this.stats.sentCount) return 0;
   return +((this.stats.openCount / this.stats.sentCount) * 100).toFixed(1);
 });
 
-// Virtual — calculate CTR percentage on the fly
+// Virtual — CTR %
 campaignSchema.virtual("ctr").get(function () {
   if (!this.stats.sentCount) return 0;
   return +((this.stats.clickCount / this.stats.sentCount) * 100).toFixed(1);
 });
 
+// Virtual — total contacts
+campaignSchema.virtual("contactCount").get(function () {
+  return this.contactIds?.length || 0;
+});
+
 campaignSchema.set("toJSON",   { virtuals: true });
 campaignSchema.set("toObject", { virtuals: true });
+
+campaignSchema.index({ status: 1 });
+campaignSchema.index({ createdBy: 1 });
 
 const Campaign = mongoose.model("Campaign", campaignSchema);
 export default Campaign;

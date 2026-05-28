@@ -3,13 +3,13 @@ import Prospect from "../prospect/prospect.model.js";
 
 const segmentService = {
 
+  // Create new segment and calculate match count
   create: async (data, userId) => {
     const segment = await segmentRepository.create({
       ...data,
       createdBy: userId,
     });
 
-    // Calculate match count
     const count = await segmentService.countMatches(segment.filters);
     await segmentRepository.updateMatchCount(segment._id, count);
     segment.matchCount = count;
@@ -17,14 +17,17 @@ const segmentService = {
     return segment;
   },
 
+  // Get all segments visible to this user (own + shared)
   getAll: async (userId) => {
     return await segmentRepository.findAll(userId);
   },
 
+  // Get single segment by ID
   getById: async (id) => {
     return await segmentRepository.findById(id);
   },
 
+  // Update segment and recalculate match count if filters changed
   update: async (id, data) => {
     const segment = await segmentRepository.update(id, data);
     if (data.filters) {
@@ -34,11 +37,12 @@ const segmentService = {
     return segment;
   },
 
+  // Delete segment permanently
   delete: async (id) => {
     return await segmentRepository.delete(id);
   },
 
-  // Count prospects matching the filters
+  // Count how many prospects match the given filters
   countMatches: async (filters = {}) => {
     const query = {};
     if (filters.industries?.length)      query.primaryIndustry = { $in: filters.industries };
@@ -52,7 +56,7 @@ const segmentService = {
     return await Prospect.countDocuments(query);
   },
 
-  // List prospects that match the segment filters
+  // Get paginated prospects that match segment filters
   getMatchingProspects: async (id, page = 1, limit = 10) => {
     const segment = await segmentRepository.findById(id);
     if (!segment) throw new Error("Segment not found");
@@ -75,6 +79,31 @@ const segmentService = {
     ]);
 
     return { prospects, total, page, limit };
+  },
+
+  // Preview — count + top 5 prospects without saving the segment
+  // Used in real-time live preview on the new segment page
+  preview: async (filters = {}) => {
+    const query = {};
+    if (filters.industries?.length)      query.primaryIndustry = { $in: filters.industries };
+    if (filters.businessModels?.length)  query.businessModel   = { $in: filters.businessModels };
+    if (filters.countries?.length)       query.country         = { $in: filters.countries };
+    if (filters.employeeRanges?.length)  query.noOfEmployees   = { $in: filters.employeeRanges };
+    if (filters.annualRevenues?.length)  query.annualRevenue   = { $in: filters.annualRevenues };
+    if (filters.salesPriorities?.length) query.salesPriority   = { $in: filters.salesPriorities };
+    if (filters.intentSignals?.length)   query.intentSignal    = { $in: filters.intentSignals };
+    if (filters.minTechFitScore)         query.techFitScore    = { $gte: filters.minTechFitScore };
+
+    // Get total count + top 5 accounts for live preview
+    const [count, topProspects] = await Promise.all([
+      Prospect.countDocuments(query),
+      Prospect.find(query)
+        .select("accountName primaryIndustry techFitScore salesPriority country")
+        .sort({ techFitScore: -1 })
+        .limit(5),
+    ]);
+
+    return { count, topProspects };
   },
 };
 

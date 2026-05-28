@@ -3,7 +3,31 @@ import campaignService from "./campaign.service.js";
 
 const campaignController = {
 
-  // POST /api/campaigns
+  // Get all campaigns with pagination
+  getAll: async (req, res, next) => {
+    try {
+      const result = await campaignService.getAll(req.query);
+      res.status(200).json({
+        success: true,
+        data: result.campaigns,
+        pagination: result.pagination,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // Get single campaign by ID
+  getById: async (req, res, next) => {
+    try {
+      const campaign = await campaignService.getById(req.params.id);
+      res.status(200).json({ success: true, data: campaign });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // Create new campaign
   create: async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -19,127 +43,82 @@ const campaignController = {
         message: "Campaign created successfully",
         data: campaign,
       });
-    } catch (error) { next(error); }
+    } catch (error) {
+      next(error);
+    }
   },
 
-  // GET /api/campaigns
-  getAll: async (req, res, next) => {
-    try {
-      const result = await campaignService.getAll(req.query);
-      res.status(200).json({
-        success: true,
-        data:       result.campaigns,
-        pagination: result.pagination,
-      });
-    } catch (error) { next(error); }
-  },
-
-  // GET /api/campaigns/:id
-  getById: async (req, res, next) => {
-    try {
-      const campaign = await campaignService.getById(req.params.id);
-      res.status(200).json({ success: true, data: campaign });
-    } catch (error) { next(error); }
-  },
-
-  // PUT /api/campaigns/:id
+  // Update campaign details
   update: async (req, res, next) => {
     try {
-      const updated = await campaignService.update(req.params.id, req.body);
+      const campaign = await campaignService.update(req.params.id, req.body, req.user._id);
       res.status(200).json({
         success: true,
         message: "Campaign updated successfully",
-        data: updated,
+        data: campaign,
       });
-    } catch (error) { next(error); }
+    } catch (error) {
+      next(error);
+    }
   },
 
-  // DELETE /api/campaigns/:id
+  // Delete campaign
   delete: async (req, res, next) => {
     try {
-      const result = await campaignService.delete(req.params.id);
-      res.status(200).json({ success: true, message: result.message });
-    } catch (error) { next(error); }
+      const result = await campaignService.delete(req.params.id, req.user._id);
+      res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      next(error);
+    }
   },
 
-  // POST /api/campaigns/:id/prospects
-  addProspects: async (req, res, next) => {
+  // Add contacts to campaign (Apollo style)
+  addContacts: async (req, res, next) => {
     try {
-      const { prospectIds } = req.body;
-      if (!prospectIds || prospectIds.length === 0) {
+      const contactIds = req.body?.contactIds;
+      if (!contactIds || !Array.isArray(contactIds) || contactIds.length === 0) {
         return res.status(400).json({
           success: false,
-          message: "prospectIds array is required",
+          message: "contactIds array is required",
         });
       }
-      const updated = await campaignService.addProspects(req.params.id, prospectIds);
+      const campaign = await campaignService.addContacts(
+        req.params.id, contactIds, req.user._id
+      );
       res.status(200).json({
         success: true,
-        message: "Prospects added to campaign",
-        data: updated,
+        message: `${contactIds.length} contact(s) added to campaign`,
+        data: campaign,
       });
-    } catch (error) { next(error); }
+    } catch (error) {
+      next(error);
+    }
   },
 
-  // DELETE /api/campaigns/:id/prospects/:prospectId
-  removeProspect: async (req, res, next) => {
+  // Remove single contact from campaign
+  removeContact: async (req, res, next) => {
     try {
-      const updated = await campaignService.removeProspect(req.params.id, req.params.prospectId);
-      res.status(200).json({
-        success: true,
-        message: "Prospect removed from campaign",
-        data: updated,
-      });
-    } catch (error) { next(error); }
+      const result = await campaignService.removeContact(
+        req.params.id, req.params.contactId, req.user._id
+      );
+      res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      next(error);
+    }
   },
 
-  // ── GET /api/campaigns/:id/stats ───────────────────────────────────────────
-  getStats: async (req, res, next) => {
-    try {
-      const campaign = await campaignService.getById(req.params.id);
-      if (!campaign) {
-        return res.status(404).json({ success: false, message: "Campaign not found" });
-      }
-
-      res.status(200).json({
-        success: true,
-        data: {
-          campaignId:   campaign._id,
-          name:         campaign.name,
-          status:       campaign.status,
-          sentCount:    campaign.stats.sentCount,
-          openCount:    campaign.stats.openCount,
-          clickCount:   campaign.stats.clickCount,
-          replyCount:   campaign.stats.replyCount,
-          conversions:  campaign.stats.conversions,
-          openRate:     campaign.openRate,   // virtual — percentage
-          ctr:          campaign.ctr,        // virtual — percentage
-          totalProspects: campaign.prospectIds.length,
-        },
-      });
-    } catch (error) { next(error); }
-  },
-
-  // ── PUT /api/campaigns/:id/stats ───────────────────────────────────────────
-  // When an email is sent/opened/clicked, the frontend should call to update stats
+  // Update campaign performance stats
   updateStats: async (req, res, next) => {
     try {
-      const { sentCount, openCount, clickCount, replyCount, conversions } = req.body;
-
-      const updated = await campaignService.updateStats(req.params.id, {
-        sentCount, openCount, clickCount, replyCount, conversions,
-      });
-
+      const campaign = await campaignService.updateStats(req.params.id, req.body);
       res.status(200).json({
         success: true,
-        message: "Stats updated successfully",
-        data: {
-          stats:    updated.stats,
-          openRate: updated.openRate,
-          ctr:      updated.ctr,
-        },
+        message: "Stats updated",
+        data: campaign,
       });
-    } catch (error) { next(error); }
+    } catch (error) {
+      next(error);
+    }
   },
 };
 
