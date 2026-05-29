@@ -3,6 +3,7 @@ import importService from "./import.service.js";
 const importController = {
 
   // POST /api/import/excel
+  // File upload karo — non-duplicates save, duplicates user ko wapas bhejo
   uploadExcel: async (req, res, next) => {
     try {
       if (!req.file) {
@@ -12,37 +13,55 @@ const importController = {
         });
       }
 
-      // Only .xlsx allowed
-      if (!req.file.originalname.match(/\.(xlsx|xls)$/i)) {
+      if (!req.file.originalname.match(/\.(xlsx|xls|csv)$/i)) {
         return res.status(400).json({
           success: false,
-          message: "Invalid file type. Only .xlsx and .xls files are allowed.",
+          message: "Invalid file type. Only .xlsx, .xls and .csv files are allowed.",
         });
       }
 
-      // ── Return response to the browser immediately
-      // Processing will continue in the background — the browser will not wait
       const filePath = req.file.path;
       const userId   = req.user._id;
 
-      // Start processing in background — do not await
-      importService.processExcelImport(filePath, userId)
-        .then((result) => {
-          console.info(`Import complete: ${result.successCount} of ${result.totalRows} rows`);
-        })
-        .catch((err) => {
-          console.error("Import background error:", err.message);
-        });
+      // Wait for result — duplicates ke liye user ka decision chahiye
+      const result = await importService.processExcelImport(filePath, userId);
 
-      // Return 202 Accepted — work started in background
-      return res.status(202).json({
+      return res.status(200).json({
         success: true,
-        message: "Import started — processing in background. A notification will be sent when complete.",
-        data: {
-          fileName:   req.file.originalname,
-          fileSize:   `${(req.file.size / 1024).toFixed(1)} KB`,
-          uploadedAt: new Date().toISOString(),
-        },
+        message: result.hasDuplicates
+          ? `${result.successCount} records saved. ${result.duplicates.length} duplicates need your review.`
+          : `Import complete — ${result.successCount} of ${result.totalRows} records saved.`,
+        data: result,
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /api/import/resolve-duplicates
+  // User ke decisions process karo — merge / skip / keep_both
+  resolveDuplicates: async (req, res, next) => {
+    try {
+      const { importLogId, decisions } = req.body;
+
+      if (!importLogId || !decisions || !Array.isArray(decisions)) {
+        return res.status(400).json({
+          success: false,
+          message: "importLogId and decisions array are required.",
+        });
+      }
+
+      const result = await importService.resolveDuplicates({
+        importLogId,
+        decisions,
+        userId: req.user._id,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Duplicates resolved — ${result.merged} merged, ${result.skipped} skipped, ${result.kept_both} kept as new.`,
+        data: result,
       });
 
     } catch (error) {
@@ -51,7 +70,6 @@ const importController = {
   },
 
   // GET /api/import/status/:importLogId
-  // Frontend may poll this endpoint to check progress
   getStatus: async (req, res, next) => {
     try {
       const { importLogId } = req.params;
@@ -69,13 +87,13 @@ const importController = {
         data: {
           importLogId:  status._id,
           fileName:     status.fileName,
-          status:       status.status,       // processing / completed / failed / partial
+          status:       status.status,
           totalRows:    status.totalRows,
           successCount: status.successCount,
           failedCount:  status.failedCount,
           progress:     status.totalRows > 0
             ? Math.round((status.successCount / status.totalRows) * 100)
-            : 0,                             // percentage 0-100
+            : 0,
           createdAt:    status.createdAt,
         },
       });

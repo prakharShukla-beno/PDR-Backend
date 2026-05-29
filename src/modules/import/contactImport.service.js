@@ -1,14 +1,15 @@
 import fs from "fs";
 import { processContactFile } from "../../common/utils/contactFileParser.js";
 import contactRepository from "../contacts/contact.repository.js";
+import Contact from "../contacts/contact.model.js";
 import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
+import auditLogService from "../auditLog/auditLog.service.js";
 import Prospect from "../prospect/prospect.model.js";
-import Contact from "../contacts/contact.model.js";
 
 const CHUNK_SIZE = 1000;
 
-// ─── Helper: Prospect se denormalized fields nikalo ───────────────────────────
+// Extract denormalized account fields
 const extractAccountFields = (prospect) => ({
   accountIndustry:      prospect.primaryIndustry  || null,
   accountCountry:       prospect.country           || null,
@@ -23,17 +24,17 @@ const extractAccountFields = (prospect) => ({
   accountWebsite:       prospect.website           || null,
 });
 
-// ─── Helper: Safe insertMany ──────────────────────────────────────────────────
-const safeInsertMany = async (repository, docs, chunkNum) => {
+// Safe bulk insert
+const safeInsertMany = async (docs, chunkNum) => {
   if (!docs || docs.length === 0) return 0;
   try {
-    await repository.insertMany(docs, { ordered: false });
-    console.log(`✅ Chunk ${chunkNum}: ${docs.length} rows inserted`);
+    await Contact.insertMany(docs, { ordered: false });
+    console.log(`✅ Chunk ${chunkNum}: ${docs.length} contacts inserted`);
     return docs.length;
   } catch (err) {
     if (err.name === "BulkWriteError" || err.code === 11000) {
       const inserted = err.result?.nInserted ?? err.result?.insertedCount ?? 0;
-      console.warn(`⚠️  Chunk ${chunkNum}: ${inserted}/${docs.length} inserted (partial)`);
+      console.warn(`⚠️ Chunk ${chunkNum}: ${inserted}/${docs.length} inserted`);
       return inserted;
     }
     console.error(`❌ Chunk ${chunkNum} error:`, err.message);
@@ -43,19 +44,17 @@ const safeInsertMany = async (repository, docs, chunkNum) => {
 
 const contactImportService = {
 
-  // ===========================================================================
-  // CONTACT EXCEL IMPORT — Upsert: email pe match
-  // ===========================================================================
+  // ==========================================================================
+  // CONTACT IMPORT — Step 1
+  // Non-duplicates save, duplicates user ko wapas bhejo
+  // Duplicate = same email already exists in DB
+  // ==========================================================================
   processContactImport: async (filePath, userId) => {
 
     const { validRows, errorDetails, totalRows } = processContactFile(filePath);
 
-    console.log(`📊 Total rows: ${totalRows}, Valid: ${validRows.length}, Errors: ${errorDetails.length}`);
-    if (errorDetails.length > 0) {
-      console.log("❌ First 5 errors:", errorDetails.slice(0, 5));
-    }
+    console.log(`📊 Total: ${totalRows}, Valid: ${validRows.length}, Errors: ${errorDetails.length}`);
 
-    // ── Import log create ──────────────────────────────────────────────────
     const importLog = await importLogRepository.create({
       fileName:     filePath.split(/[\\\/]/).pop(),
       importType:   "excel",
@@ -67,70 +66,49 @@ const contactImportService = {
       status:       "processing",
     });
 
-    // ── Early exit ─────────────────────────────────────────────────────────
     if (!validRows || validRows.length === 0) {
-      await importLogRepository.update(importLog._id, {
-        status:      "failed",
-        failedCount: errorDetails.length,
-      });
+      await importLogRepository.update(importLog._id, { status: "failed", failedCount: errorDetails.length });
       try { fs.unlinkSync(filePath); } catch (_) {}
-      return {
-        importLogId:   importLog._id,
-        totalRows,
-        successCount:  0,
-        failedCount:   errorDetails.length,
-        linkedCount:   0,
-        unlinkedCount: 0,
-        errorDetails,
-        status:        "failed",
-      };
+      return { importLogId: importLog._id, totalRows, successCount: 0, failedCount: errorDetails.length, duplicates: [], errorDetails, status: "failed" };
     }
 
-    // ── Step 1: Account map banao ──────────────────────────────────────────
-    const uniqueAccountNames = [
-      ...new Set(validRows.map(r => r.accountName?.trim()).filter(Boolean)),
-    ];
+    // Find existing contacts by email (duplicate check)
+    const emails = validRows.map(r => r.email?.toLowerCase().trim()).filter(Boolean);
+    const existingContacts = emails.length > 0
+      ? await Contact.find({ email: { $in: emails } })
+          .select("_id email firstName lastName standardizedRoles functionalDomain accountName accountIndustry primaryPhone linkedIn")
+          .lean()
+      : [];
+
+    const existingEmailMap = {};
+    for (const c of existingContacts) {
+      if (c.email) existingEmailMap[c.email.toLowerCase()] = c;
+    }
+
+    // Get account map for linking
+    const uniqueAccountNames = [...new Set(validRows.map(r => r.accountName?.trim()).filter(Boolean))];
     const accountMap = {};
 
     if (uniqueAccountNames.length > 0) {
-      const existingAccounts = await Prospect.find({
+      const accounts = await Prospect.find({
         accountNameLower: { $in: uniqueAccountNames.map(n => n.toLowerCase()) },
-      }).select(
-        "_id accountName accountNameLower primaryIndustry country hqLocationCity " +
-        "noOfEmployees annualRevenue businessModel salesPriority clvRanking " +
-        "techFitScore intentSignal website"
-      ).lean();
+      }).select("_id accountName accountNameLower primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal website").lean();
 
-      for (const acc of existingAccounts) {
+      for (const acc of accounts) {
         if (acc.accountNameLower) accountMap[acc.accountNameLower] = acc;
       }
-      console.log(`✅ Accounts matched: ${existingAccounts.length} of ${uniqueAccountNames.length}`);
     }
 
-    // ── Step 2: Existing contacts check — email pe ─────────────────────────
-    const emails = validRows.map(r => r.email?.toLowerCase()).filter(Boolean);
-    const existingEmailSet = new Set();
-
-    if (emails.length > 0) {
-      const existingContacts = await Contact.find({
-        email: { $in: emails },
-      }).select("email").lean();
-
-      for (const c of existingContacts) {
-        if (c.email) existingEmailSet.add(c.email.toLowerCase());
-      }
-      console.log(`📧 Existing contacts by email: ${existingEmailSet.size}`);
-    }
-
-    // ── Step 3: Rows prepare ───────────────────────────────────────────────
-    const newRows    = []; // fresh insert
-    const upsertRows = []; // email match — update
-    let linkedCount   = 0;
-    let unlinkedCount = 0;
+    // Separate new contacts from duplicates
+    const newRows       = [];
+    const duplicateRows = [];
 
     for (const row of validRows) {
-      const nameKey       = row.accountName?.trim().toLowerCase();
-      const prospect      = nameKey ? accountMap[nameKey] : null;
+      const emailKey  = row.email?.toLowerCase().trim();
+      const isDuplicate = emailKey && existingEmailMap[emailKey];
+
+      const nameKey   = row.accountName?.trim().toLowerCase();
+      const prospect  = nameKey ? accountMap[nameKey] : null;
       const accountFields = prospect ? extractAccountFields(prospect) : {};
 
       const preparedRow = {
@@ -143,60 +121,38 @@ const contactImportService = {
         importLogId: importLog._id,
       };
 
-      if (prospect) linkedCount++;
-      else          unlinkedCount++;
-
-      const emailKey = row.email?.toLowerCase();
-      if (emailKey && existingEmailSet.has(emailKey)) {
-        upsertRows.push(preparedRow); // email match — update karo
+      if (isDuplicate) {
+        duplicateRows.push({
+          newData:      preparedRow,
+          existingData: existingEmailMap[emailKey],
+          matchFields:  ["email"],
+        });
       } else {
-        newRows.push(preparedRow);    // naya — insert karo
+        newRows.push(preparedRow);
       }
     }
 
-    console.log(`📦 New: ${newRows.length} | Update existing: ${upsertRows.length} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
+    console.log(`📦 New: ${newRows.length} | Duplicates: ${duplicateRows.length}`);
 
-    // ── Step 4: Naye contacts insert ───────────────────────────────────────
+    // Insert new contacts
     let successCount = 0;
     const insertErrors = [];
 
     for (let i = 0; i < newRows.length; i += CHUNK_SIZE) {
       const chunk    = newRows.slice(i, i + CHUNK_SIZE);
       const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
-      const inserted = await safeInsertMany(contactRepository, chunk, chunkNum);
+      const inserted = await safeInsertMany(chunk, chunkNum);
       successCount  += inserted;
-      if (inserted < chunk.length) {
-        insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
-      }
+      if (inserted < chunk.length) insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
       await importLogRepository.update(importLog._id, { successCount });
     }
 
-    // ── Step 5: Existing contacts update — email pe match ─────────────────
-    let updatedCount = 0;
-    for (const row of upsertRows) {
-      try {
-        await Contact.findOneAndUpdate(
-          { email: row.email?.toLowerCase() },
-          { $set: row },
-          { runValidators: false }
-        );
-        updatedCount++;
-      } catch (err) {
-        insertErrors.push(`Contact update failed: ${row.email} — ${err.message}`);
-      }
-    }
-
-    if (updatedCount > 0) {
-      successCount += updatedCount;
-      console.log(`🔄 Updated existing contacts: ${updatedCount}`);
-      await importLogRepository.update(importLog._id, { successCount });
-    }
-
-    // ── Step 6: Final status ───────────────────────────────────────────────
-    const allErrors   = [...errorDetails, ...insertErrors];
-    const finalStatus =
-      successCount === 0              ? "failed"  :
-      successCount < validRows.length ? "partial" :
+    const allErrors     = [...errorDetails, ...insertErrors];
+    const hasDuplicates = duplicateRows.length > 0;
+    const finalStatus   =
+      successCount === 0 && !hasDuplicates ? "failed"  :
+      hasDuplicates                        ? "partial" :
+      successCount < newRows.length        ? "partial" :
       "completed";
 
     await importLogRepository.update(importLog._id, {
@@ -208,28 +164,89 @@ const contactImportService = {
 
     try { fs.unlinkSync(filePath); } catch (_) {}
 
-    await notificationService.create({
+    await auditLogService.log({
       userId,
-      type:          "import_complete",
-      message:       `Contact import ${finalStatus} — ${newRows.length} new, ${updatedCount} updated. Linked: ${linkedCount}, Unlinked: ${unlinkedCount}`,
-      refId:         importLog._id,
-      refCollection: "importLogs",
+      action:      "IMPORT",
+      entity:      "Import",
+      entityId:    importLog._id,
+      description: `Contact import — ${successCount} saved, ${duplicateRows.length} duplicates need review`,
     });
 
-    console.log(`🏁 Contact import done — New: ${newRows.length} | Updated: ${updatedCount} | Linked: ${linkedCount} | Unlinked: ${unlinkedCount}`);
+    console.log(`🏁 Contact import — ${successCount} saved | ${duplicateRows.length} duplicates pending`);
 
     return {
       importLogId:   importLog._id,
       totalRows,
       successCount,
-      newCount:      newRows.length,
-      updatedCount,
       failedCount:   allErrors.length,
-      linkedCount,
-      unlinkedCount,
+      duplicates:    duplicateRows,
+      hasDuplicates,
       errorDetails:  allErrors,
       status:        finalStatus,
     };
+  },
+
+  // ==========================================================================
+  // RESOLVE CONTACT DUPLICATES — Step 2
+  // Actions: merge | skip | keep_both
+  // ==========================================================================
+  resolveContactDuplicates: async ({ importLogId, decisions, userId }) => {
+    const results = { merged: 0, skipped: 0, kept_both: 0, errors: [] };
+
+    for (const decision of decisions) {
+      const { existingId, newData, action } = decision;
+
+      try {
+        if (action === "skip") {
+          // Keep existing, ignore new
+          results.skipped++;
+
+        } else if (action === "merge") {
+          // Update existing contact with new data (only fill empty fields)
+          const updateData = {};
+          const mergeFields = [
+            "standardizedRoles", "functionalDomain", "keyFocusAreas",
+            "primaryPhone", "secondaryPhone", "primaryMobNo",
+            "linkedIn", "twitterUrl", "country", "state", "city", "timeZone",
+            "accountId", "accountName", "accountIndustry", "accountCountry",
+            "accountSalesPriority", "accountClvRanking", "isLinked",
+          ];
+
+          for (const field of mergeFields) {
+            if (newData[field]) updateData[field] = newData[field];
+          }
+
+          if (Object.keys(updateData).length > 0) {
+            await Contact.findByIdAndUpdate(existingId, { $set: updateData });
+          }
+
+          results.merged++;
+
+        } else if (action === "keep_both") {
+          // Save as new separate contact
+          const { _id, ...newContactData } = newData;
+          await Contact.create({ ...newContactData, importLogId });
+          results.kept_both++;
+        }
+
+      } catch (err) {
+        results.errors.push({ existingId, action, error: err.message });
+      }
+    }
+
+    await importLogRepository.update(importLogId, { status: "completed" });
+
+    await notificationService.create({
+      userId,
+      type:    "import_complete",
+      message: `Contact import complete — ${results.merged} merged, ${results.skipped} skipped, ${results.kept_both} kept as new`,
+      refId:         importLogId,
+      refCollection: "importLogs",
+    });
+
+    console.log(`✅ Contact duplicates resolved — Merged: ${results.merged} | Skipped: ${results.skipped} | Kept Both: ${results.kept_both}`);
+
+    return results;
   },
 };
 
