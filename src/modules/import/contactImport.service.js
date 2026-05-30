@@ -6,6 +6,7 @@ import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
 import auditLogService from "../auditLog/auditLog.service.js";
 import Prospect from "../prospect/prospect.model.js";
+import duplicateRepository from "../duplicate/duplicate.repository.js";
 
 const CHUNK_SIZE = 1000;
 
@@ -122,6 +123,16 @@ const contactImportService = {
       };
 
       if (isDuplicate) {
+        // Save to duplicate collection for review on Duplicates page
+        await duplicateRepository.create({
+          prospectId1: existingEmailMap[emailKey]._id,
+          entityType:  "Contact",   // ← Contact duplicate hai
+          newData:     preparedRow,
+          matchFields: ["email"],
+          source:      "import",
+          importLogId: importLog._id,
+          status:      "pending",
+        });
         duplicateRows.push({
           newData:      preparedRow,
           existingData: existingEmailMap[emailKey],

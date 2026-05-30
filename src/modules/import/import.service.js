@@ -123,11 +123,20 @@ const importService = {
           : row.website.toLowerCase();
         const existingRecord = existingMap[existingKey];
 
-        // Send duplicate info back to frontend for user decision
+        // Save duplicate to DB for review on Duplicates page
+        const matchFields = [nameMatch && "accountName", websiteMatch && "website"].filter(Boolean);
+        await duplicateRepository.create({
+          prospectId1: existingRecord._id,
+          newData:     { ...prospectData, contacts },
+          matchFields,
+          source:      "import",
+          importLogId: importLog._id,
+          status:      "pending",
+        });
         duplicateRows.push({
           newData:      { ...prospectData, contacts },
           existingData: existingRecord,
-          matchFields:  [nameMatch && "accountName", websiteMatch && "website"].filter(Boolean),
+          matchFields,
         });
       } else {
         newRows.push({
