@@ -197,7 +197,7 @@ prospectSchema.pre("insertMany", function (next, docs) {
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 prospectSchema.index({ accountName: "text", website: "text" });
 prospectSchema.index({ accountName: 1 });
-prospectSchema.index({ accountNameLower: 1 });   // exact match ke liye
+prospectSchema.index({ accountNameLower: 1 });   // for exact match
 prospectSchema.index({ website: 1 });
 prospectSchema.index({ isDuplicate: 1 });
 prospectSchema.index({ primaryIndustry: 1 });

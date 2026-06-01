@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const duplicateSchema = new mongoose.Schema(
   {
-    // Existing record in DB — Prospect ya Contact ka _id
+    // Existing record in DB — _id of Prospect or Contact
     prospectId1: {
       type: mongoose.Schema.Types.ObjectId,
       refPath: "entityType",  // dynamic ref — entityType pe depend karta hai
@@ -14,7 +14,7 @@ const duplicateSchema = new mongoose.Schema(
       refPath: "entityType",
       default: null,
     },
-    // "Prospect" ya "Contact" — populate ke liye
+    // "Prospect" or "Contact" — used for populate
     entityType: {
       type: String,
       enum: ["Prospect", "Contact"],

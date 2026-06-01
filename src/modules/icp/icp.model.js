@@ -17,6 +17,7 @@ const icpSchema = new mongoose.Schema(
       required: true,
     },
 
+    // ── Company filters ──────────────────────────────────────────────────────
     industries: {
       type: [String],
       enum: [
@@ -29,10 +30,6 @@ const icpSchema = new mongoose.Schema(
     businessModels: {
       type: [String],
       enum: ["B2B", "B2C", "B2B2C", "D2C", "E-Commerce", "Marketplace"],
-      default: [],
-    },
-    countries: {
-      type: [String],
       default: [],
     },
     annualRevenues: {
@@ -48,42 +45,31 @@ const icpSchema = new mongoose.Schema(
       enum: ["1-50", "51-200", "201-500", "501-1,000", "1,001-5,000", "5,000+"],
       default: [],
     },
-    minTechFitScore: {
-      type: Number,
-      min: 0,
-      max: 100,
-      default: null,
-    },
-    intentSignals: {
-      type: [String],
-      enum: [
-        "Hyper-Growth Mode", "Cost Containment", "Risk Mitigation",
-        "Modernization Mandate", "Hiring for Data role",
-        "Capital Event", "Strategic Pivot", "Regulatory Action",
-      ],
-      default: [],
-    },
 
+    // ── Target Market — replaces flat countries[] ────────────────────────────
+    // Regions: include = match, exclude = block
+    targetRegionsInclude: { type: [String], default: [] },
+    targetRegionsExclude: { type: [String], default: [] },
+
+    // Per-country exclusions within included regions (e.g. include APAC but exclude Pakistan)
+    targetRegionCountriesExclude: { type: [String], default: [] },
+
+    // Countries: include = match, exclude = block (separate from region logic)
+    targetCountriesInclude: { type: [String], default: [] },
+    targetCountriesExclude: { type: [String], default: [] },
+
+    // ── Buyer Persona ────────────────────────────────────────────────────────
     buyerPersona: {
       targetSeniorities: {
         type: [String],
         enum: ["C-Suite", "VP", "Director", "Manager", "Senior IC"],
         default: [],
       },
-      targetDepartments: {
-        type: [String],
-        default: [],
-      },
-      targetDesignations: {
-        type: [String],
-        default: [],
-      },
+      targetDepartments: { type: [String], default: [] },
+      targetDesignations: { type: [String], default: [] },
     },
 
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
+    isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

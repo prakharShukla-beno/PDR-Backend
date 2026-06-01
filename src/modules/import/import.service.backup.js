@@ -10,7 +10,7 @@
 
 // const CHUNK_SIZE = 1000;
 
-// // ─── Helper: Prospect se denormalized fields nikalo ───────────────────────────
+// // ─── Helper: extract denormalized fields from Prospect ────────────────────────
 // const extractAccountFields = (prospect) => ({
 //   accountIndustry:      prospect.primaryIndustry  || null,
 //   accountCountry:       prospect.country           || null,
@@ -129,7 +129,7 @@
 
 //     for (let i = 0; i < validRows.length; i++) {
 //       const row      = validRows[i];
-//       const contacts = row.contacts; // excelParser se aaya embedded contact
+//       const contacts = row.contacts; // embedded contact comes from excelParser
 
 //       if (!contacts || contacts.length === 0) continue;
 

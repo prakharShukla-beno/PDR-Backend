@@ -3,107 +3,128 @@ import Prospect from "../prospect/prospect.model.js";
 
 const segmentService = {
 
-  // Create new segment and calculate match count
-  create: async (data, userId) => {
-    const segment = await segmentRepository.create({
-      ...data,
-      createdBy: userId,
-    });
-
-    const count = await segmentService.countMatches(segment.filters);
-    await segmentRepository.updateMatchCount(segment._id, count);
-    segment.matchCount = count;
-
-    return segment;
+  // Build MongoDB query from segment filters
+  buildQuery: (filters = {}) => {
+    const query = {};
+    if (filters.industries?.length)      query.primaryIndustry = { $in: filters.industries };
+    if (filters.businessModels?.length)  query.businessModel   = { $in: filters.businessModels };
+    if (filters.countries?.length)       query.country         = { $in: filters.countries };
+    if (filters.employeeRanges?.length)  query.noOfEmployees   = { $in: filters.employeeRanges };
+    if (filters.annualRevenues?.length)  query.annualRevenue   = { $in: filters.annualRevenues };
+    if (filters.salesPriorities?.length) query.salesPriority   = { $in: filters.salesPriorities };
+    if (filters.intentSignals?.length)   query.intentSignal    = { $in: filters.intentSignals };
+    if (filters.minTechFitScore)         query.techFitScore    = { $gte: filters.minTechFitScore };
+    return query;
   },
 
-  // Get all segments visible to this user (own + shared)
+  // Create segment and take first snapshot immediately
+  create: async (data, userId) => {
+    // Save segment first
+    const segment = await segmentRepository.create({
+      ...data,
+      createdBy:         userId,
+      matchedAccountIds: [],
+      matchCount:        0,
+      lastSyncedAt:      null,
+    });
+
+    // Find all matching prospect IDs and store them
+    const query      = segmentService.buildQuery(data.filters || {});
+    const prospects  = await Prospect.find(query).select("_id").lean();
+    const ids        = prospects.map(p => p._id);
+    await segmentRepository.saveSnapshot(segment._id, ids);
+
+    // Return updated segment with count
+    return await segmentRepository.findById(segment._id);
+  },
+
+  // Get all segments for this user
   getAll: async (userId) => {
     return await segmentRepository.findAll(userId);
   },
 
-  // Get single segment by ID
+  // Get single segment
   getById: async (id) => {
     return await segmentRepository.findById(id);
   },
 
-  // Update segment and recalculate match count if filters changed
+  // Update segment name/description/filters
+  // If filters changed — take new snapshot automatically
   update: async (id, data) => {
-    const segment = await segmentRepository.update(id, data);
+    await segmentRepository.update(id, data);
+
     if (data.filters) {
-      const count = await segmentService.countMatches(data.filters);
-      await segmentRepository.updateMatchCount(id, count);
+      // Filters changed — retake snapshot
+      const query     = segmentService.buildQuery(data.filters);
+      const prospects = await Prospect.find(query).select("_id").lean();
+      const ids       = prospects.map(p => p._id);
+      await segmentRepository.saveSnapshot(id, ids);
     }
-    return segment;
+
+    return await segmentRepository.findById(id);
   },
 
-  // Delete segment permanently
+  // Delete segment
   delete: async (id) => {
     return await segmentRepository.delete(id);
   },
 
-  // Count how many prospects match the given filters
-  countMatches: async (filters = {}) => {
-    const query = {};
-    if (filters.industries?.length)      query.primaryIndustry = { $in: filters.industries };
-    if (filters.businessModels?.length)  query.businessModel   = { $in: filters.businessModels };
-    if (filters.countries?.length)       query.country         = { $in: filters.countries };
-    if (filters.employeeRanges?.length)  query.noOfEmployees   = { $in: filters.employeeRanges };
-    if (filters.annualRevenues?.length)  query.annualRevenue   = { $in: filters.annualRevenues };
-    if (filters.salesPriorities?.length) query.salesPriority   = { $in: filters.salesPriorities };
-    if (filters.intentSignals?.length)   query.intentSignal    = { $in: filters.intentSignals };
-    if (filters.minTechFitScore)         query.techFitScore    = { $gte: filters.minTechFitScore };
-    return await Prospect.countDocuments(query);
-  },
-
-  // Get paginated prospects that match segment filters
-  getMatchingProspects: async (id, page = 1, limit = 10) => {
+  // Sync — run fresh query against full DB and update snapshot
+  // Called when user clicks Sync button
+  sync: async (id) => {
     const segment = await segmentRepository.findById(id);
     if (!segment) throw new Error("Segment not found");
 
-    const query = {};
-    const f = segment.filters;
-    if (f.industries?.length)      query.primaryIndustry = { $in: f.industries };
-    if (f.businessModels?.length)  query.businessModel   = { $in: f.businessModels };
-    if (f.countries?.length)       query.country         = { $in: f.countries };
-    if (f.employeeRanges?.length)  query.noOfEmployees   = { $in: f.employeeRanges };
-    if (f.annualRevenues?.length)  query.annualRevenue   = { $in: f.annualRevenues };
-    if (f.salesPriorities?.length) query.salesPriority   = { $in: f.salesPriorities };
-    if (f.intentSignals?.length)   query.intentSignal    = { $in: f.intentSignals };
-    if (f.minTechFitScore)         query.techFitScore    = { $gte: f.minTechFitScore };
+    // Run fresh query against current DB
+    const query     = segmentService.buildQuery(segment.filters);
+    const prospects = await Prospect.find(query).select("_id").lean();
+    const ids       = prospects.map(p => p._id);
 
-    const skip = (page - 1) * limit;
-    const [prospects, total] = await Promise.all([
-      Prospect.find(query).skip(skip).limit(limit).sort({ techFitScore: -1 }),
-      Prospect.countDocuments(query),
-    ]);
+    // Save new snapshot
+    await segmentRepository.saveSnapshot(id, ids);
 
-    return { prospects, total, page, limit };
+    return await segmentRepository.findById(id);
   },
 
-  // Preview — count + top 5 prospects without saving the segment
-  // Used in real-time live preview on the new segment page
-  preview: async (filters = {}) => {
-    const query = {};
-    if (filters.industries?.length)      query.primaryIndustry = { $in: filters.industries };
-    if (filters.businessModels?.length)  query.businessModel   = { $in: filters.businessModels };
-    if (filters.countries?.length)       query.country         = { $in: filters.countries };
-    if (filters.employeeRanges?.length)  query.noOfEmployees   = { $in: filters.employeeRanges };
-    if (filters.annualRevenues?.length)  query.annualRevenue   = { $in: filters.annualRevenues };
-    if (filters.salesPriorities?.length) query.salesPriority   = { $in: filters.salesPriorities };
-    if (filters.intentSignals?.length)   query.intentSignal    = { $in: filters.intentSignals };
-    if (filters.minTechFitScore)         query.techFitScore    = { $gte: filters.minTechFitScore };
+  // Get paginated accounts from stored snapshot — no fresh query
+  getStoredAccounts: async (id, page = 1, limit = 10) => {
+    const segment = await segmentRepository.findById(id);
+    if (!segment) throw new Error("Segment not found");
 
-    // Get total count + top 5 accounts for live preview
-    const [count, topProspects] = await Promise.all([
+    const total = segment.matchedAccountIds.length;
+    const skip  = (page - 1) * limit;
+
+    // Paginate the stored IDs first
+    const pageIds = segment.matchedAccountIds.slice(skip, skip + limit);
+
+    // Fetch only those accounts from DB
+    const accounts = await Prospect.find({ _id: { $in: pageIds } })
+      .select("accountName website primaryIndustry country techFitScore salesPriority clvRanking intentSignal noOfEmployees")
+      .lean();
+
+    return {
+      accounts,
+      total,
+      page:       Number(page),
+      limit:      Number(limit),
+      totalPages: Math.ceil(total / limit),
+    };
+  },
+
+  // Preview — count + top 5 without saving — for live filter preview
+  preview: async (filters = {}) => {
+    const query = segmentService.buildQuery(filters);
+
+    const [count, topAccounts] = await Promise.all([
       Prospect.countDocuments(query),
       Prospect.find(query)
         .select("accountName primaryIndustry techFitScore salesPriority country")
         .sort({ techFitScore: -1 })
-        .limit(5),
+        .limit(5)
+        .lean(),
     ]);
 
-    return { count, topProspects };
+    return { count, topAccounts };
   },
 };
 

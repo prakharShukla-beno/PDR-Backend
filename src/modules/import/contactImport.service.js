@@ -47,7 +47,7 @@ const contactImportService = {
 
   // ==========================================================================
   // CONTACT IMPORT — Step 1
-  // Non-duplicates save, duplicates user ko wapas bhejo
+  // Save non-duplicates and return duplicates to the user for review
   // Duplicate = same email already exists in DB
   // ==========================================================================
   processContactImport: async (filePath, userId) => {

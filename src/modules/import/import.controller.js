@@ -3,7 +3,7 @@ import importService from "./import.service.js";
 const importController = {
 
   // POST /api/import/excel
-  // File upload karo — non-duplicates save, duplicates user ko wapas bhejo
+  // Upload file — save non-duplicates and return duplicates to the user
   uploadExcel: async (req, res, next) => {
     try {
       if (!req.file) {
@@ -23,7 +23,7 @@ const importController = {
       const filePath = req.file.path;
       const userId   = req.user._id;
 
-      // Wait for result — duplicates ke liye user ka decision chahiye
+      // Wait for result — duplicates require a user decision
       const result = await importService.processExcelImport(filePath, userId);
 
       return res.status(200).json({
@@ -40,7 +40,7 @@ const importController = {
   },
 
   // POST /api/import/resolve-duplicates
-  // User ke decisions process karo — merge / skip / keep_both
+  // Process user decisions — merge / skip / keep_both
   resolveDuplicates: async (req, res, next) => {
     try {
       const { importLogId, decisions } = req.body;

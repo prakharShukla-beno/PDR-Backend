@@ -11,8 +11,8 @@ const campaignSchema = new mongoose.Schema(
     promptUsed:  { type: String, default: null },
 
     // ── Apollo style — Contacts in campaign ───────────────────────────────────
-    // prospectIds → REMOVED (accounts add karna galat tha)
-    // contactIds  → Contacts directly campaign mein jaate hain
+    // prospectIds → REMOVED (adding accounts here was incorrect)
+    // contactIds  → Contacts are directly added to the campaign
     contactIds: [
       { type: mongoose.Schema.Types.ObjectId, ref: "Contact" },
     ],

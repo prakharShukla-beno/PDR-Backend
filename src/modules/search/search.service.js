@@ -172,7 +172,7 @@ const searchService = {
       accountClvRankingInclude,    accountClvRankingExclude,
       accountIntentSignalInclude,  accountIntentSignalExclude,
 
-      // TechFit Score range (account ka)
+      // TechFit Score range (account level)
       techFitScoreMin, techFitScoreMax,
 
       // Pagination + sort
@@ -258,7 +258,7 @@ const searchService = {
 
   // ===========================================================================
   // FILTER OPTIONS — for frontend dropdowns
-  // Dono collections se unique values
+  // Unique values from both collections
   // ===========================================================================
   getFilterOptions: async () => {
     const [

@@ -11,7 +11,7 @@ const duplicateRepository = {
 
     const [duplicates, total] = await Promise.all([
       Duplicate.find(filter)
-        .populate("prospectId1")  // refPath se auto Prospect ya Contact populate hoga
+        .populate("prospectId1")  // refPath automatically populates as Prospect or Contact
         .populate("prospectId2")
         .populate("reviewedBy", "name email")
         .sort({ createdAt: -1 })

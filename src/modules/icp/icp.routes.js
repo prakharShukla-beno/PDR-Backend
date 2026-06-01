@@ -7,7 +7,7 @@ const router = Router();
 
 router.use(authMiddleware);
 
-// Validation — create/update ke liye
+// Validation — for create/update
 const icpValidation = [
   body("name")
     .notEmpty().withMessage("ICP profile name is required")

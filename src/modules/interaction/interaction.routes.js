@@ -8,7 +8,7 @@ const router = Router();
 // All routes require login
 router.use(authMiddleware);
 
-// Validation — create ke liye
+// Validation — for create
 const createValidation = [
   body("prospectId")
     .notEmpty().withMessage("prospectId is required")
@@ -33,7 +33,7 @@ const createValidation = [
     .isString().withMessage("notes must be a string"),
 ];
 
-// Validation — update ke liye (sab optional)
+// Validation — for update (all optional)
 const updateValidation = [
   body("type")
     .optional()

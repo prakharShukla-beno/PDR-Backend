@@ -13,7 +13,7 @@ import dashboardRoutes     from "../modules/dashboard/dashboard.routes.js";
 import icpRoutes           from "../modules/icp/icp.routes.js";
 import auditLogRoutes      from "../modules/auditLog/auditLog.routes.js";
 import contactRoutes       from "../modules/contacts/contact.routes.js";
-import segmentRoutes       from "../modules/segment/segment.routes.js";  // ← ADD kiya
+import segmentRoutes       from "../modules/segment/segment.routes.js";  // ← added
 import migrationRoutes     from "./migration.route.js";
 
 const router = Router();
@@ -33,6 +33,6 @@ router.use("/dashboard",        dashboardRoutes);
 router.use("/icp",              icpRoutes);
 router.use("/audit-logs",       auditLogRoutes);
 router.use("/contacts",         contactRoutes);
-router.use("/segments",         segmentRoutes);     // ← ADD kiya
+router.use("/segments",         segmentRoutes);     // ← added
 
 export default router;

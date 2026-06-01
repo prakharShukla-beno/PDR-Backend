@@ -108,7 +108,7 @@ const validateContactRow = (row, rowNumber) => {
     errors.push(`Row ${rowNumber}: secondaryEmail "${row.secondaryEmail}" is invalid`);
   }
 
-  // Functional domain check — agar diya hai toh valid hona chahiye
+  // Functional domain check — if provided, it must be valid
   if (row.functionalDomain && !VALID_FUNCTIONAL_DOMAINS.includes(row.functionalDomain)) {
     // Invalid functional domain — set to null (do not reject the row)
     row.functionalDomain = null;

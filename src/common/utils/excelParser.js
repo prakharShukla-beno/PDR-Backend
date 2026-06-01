@@ -176,7 +176,7 @@ const validateRow = (row, rowNumber) => {
     errors.push(`Row ${rowNumber}: accountName is required`);
   }
 
-  // Enum check — sirf defined fields ke liye
+  // Enum check — only for defined fields
   for (const [field, allowedValues] of Object.entries(ENUM_FIELDS)) {
     const value = field.startsWith("contact.")
       ? row.contacts?.[0]?.[field.split(".")[1]]

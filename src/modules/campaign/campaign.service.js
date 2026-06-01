@@ -83,7 +83,7 @@ const campaignService = {
       throw error;
     }
 
-    // Campaign se remove hone pe contacts ke campaignIds bhi update karo
+    // When a campaign is deleted, update the contacts' campaignIds too
     if (exists.contactIds?.length > 0) {
       await contactRepository.updateMany(
         { _id: { $in: exists.contactIds } },
@@ -126,10 +126,10 @@ const campaignService = {
 
     const validIds = validContacts.contacts.map(c => c._id);
 
-    // Campaign mein contacts add karo
+    // Add contacts to the campaign
     const updated = await campaignRepository.addContacts(campaignId, validIds);
 
-    // Contacts ke campaignIds mein bhi add karo
+    // Also add the campaign ID to the contacts' campaignIds
     await contactRepository.updateMany(
       { _id: { $in: validIds } },
       { $addToSet: { campaignIds: campaignId } }
@@ -157,7 +157,7 @@ const campaignService = {
 
     await campaignRepository.removeContact(campaignId, contactId);
 
-    // Contact ke campaignIds se bhi remove karo
+    // Also remove the campaign ID from the contact's campaignIds
     await contactRepository.update(contactId, {
       $pull: { campaignIds: campaignId },
     });

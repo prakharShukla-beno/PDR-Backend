@@ -21,7 +21,7 @@ const segmentSchema = new mongoose.Schema(
       default: false,
     },
 
-    // ── Filters — jo ICP builder se aate hain ─────────────────────────────────
+    // Filter criteria used to match prospects
     filters: {
       industries:      { type: [String], default: [] },
       businessModels:  { type: [String], default: [] },
@@ -33,10 +33,23 @@ const segmentSchema = new mongoose.Schema(
       minTechFitScore: { type: Number, default: null },
     },
 
-    // Kitne prospects match karte hain
+    // Stored snapshot of matched prospect IDs (Apollo style)
+    // These are saved at create/sync time — not recalculated every open
+    matchedAccountIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Prospect",
+    }],
+
+    // Total count of matched accounts
     matchCount: {
       type: Number,
       default: 0,
+    },
+
+    // Last time the snapshot was synced with fresh data
+    lastSyncedAt: {
+      type: Date,
+      default: null,
     },
   },
   { timestamps: true }

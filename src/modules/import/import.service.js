@@ -47,7 +47,7 @@ const importService = {
 
   // ===========================================================================
   // ACCOUNT EXCEL IMPORT — Step 1
-  // Non-duplicates save karo, duplicates user ko wapas bhejo
+  // Save non-duplicates and return duplicates to the user for review
   // ===========================================================================
   processExcelImport: async (filePath, userId) => {
 
@@ -265,7 +265,7 @@ const importService = {
       successCount,
       failedCount:    allErrors.length,
       contactsSaved,
-      duplicates:     duplicateRows,    // ← Frontend ko ye dikhana hai
+      duplicates:     duplicateRows,    // ← This is returned for the frontend to display
       hasDuplicates:  hasDuplicates,
       errorDetails:   allErrors,
       status:         finalStatus,
@@ -274,7 +274,7 @@ const importService = {
 
   // ===========================================================================
   // RESOLVE DUPLICATES — Step 2
-  // User ke decision ke baad process karo
+  // Process after the user decision
   // Actions: "merge" | "skip" | "keep_both"
   // ===========================================================================
   resolveDuplicates: async ({ importLogId, decisions, userId }) => {
