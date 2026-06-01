@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import contactImportController from "./contactImport.controller.js";
 import authMiddleware from "../../common/middlewares/auth.middleware.js";
@@ -8,6 +9,11 @@ import authMiddleware from "../../common/middlewares/auth.middleware.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const uploadDir  = path.join(__dirname, "../../../uploads");
+
+// Ensure uploads directory exists
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
