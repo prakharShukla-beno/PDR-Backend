@@ -145,6 +145,42 @@ const prospectSchema = new mongoose.Schema(
       default: null,
     },
 
+    // ── Account Scoring & Tiering ───────────────────────────────────────────
+    finalScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
+
+    scoringMetadata: {
+      revenuePoints: Number,
+      strategyBonus: Number,
+      industryMultiplier: Number,
+      techFitMultiplier: Number,
+      calculatedAt: Date,
+    },
+
+    status: {
+      type: String,
+      enum: ["active", "disqualified", "archived"],
+      default: "active",
+    },
+
+    disqualificationReason: {
+      type: String,
+      enum: [
+        "Tech Stack Incompatible",
+        "Already Client",
+        "Invalid/Duplicate",
+        "Out of Market",
+        null,
+      ],
+      default: null,
+    },
+
+    disqualifiedAt: Date,
+
     // ── Relational References ────────────────────────────────────────────────
     // contacts[] array removed — contacts are stored in the separate Contact collection
     // Account detail page: GET /api/contacts?accountId=xxx
@@ -212,6 +248,8 @@ prospectSchema.index({ annualRevenue: 1 });
 prospectSchema.index({ techFitScore: 1 });
 prospectSchema.index({ assignedTo: 1 });
 prospectSchema.index({ source: 1 });
+prospectSchema.index({ finalScore: 1 });
+prospectSchema.index({ status: 1 });
 
 const Prospect = mongoose.model("Prospect", prospectSchema);
 export default Prospect;

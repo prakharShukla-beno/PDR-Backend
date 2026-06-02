@@ -1,5 +1,6 @@
 import prospectRepository from "./prospect.repository.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
+import scoringEngine from "../../common/utils/scoring.js";
 import pkg from "xlsx";
 const { utils, write } = pkg;
 
@@ -174,6 +175,161 @@ const prospectService = {
     const filename = `prospects_${new Date().toISOString().split("T")[0]}.xlsx`;
 
     return { buffer, filename };
+  },
+
+  // ── FR-6.1: Calculate and update final score for a prospect ──────────────
+  calculateAndUpdateScore: async (id) => {
+    const prospect = await prospectRepository.findById(id);
+    if (!prospect) {
+      const error = new Error("Prospect not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    // Step 1: Calculate final score using scoring engine
+    const scoreResult = scoringEngine.calculateFinalScore(prospect);
+
+    // Step 2: If tech fit fails, disqualify
+    if (!scoreResult.metadata.techFitMultiplier || scoreResult.metadata.techFitMultiplier === 0) {
+      const updateData = {
+        finalScore: 0,
+        status: "disqualified",
+        disqualificationReason: "Tech Stack Incompatible",
+        disqualifiedAt: new Date(),
+        scoringMetadata: scoreResult.metadata,
+      };
+      return await prospectRepository.update(id, updateData);
+    }
+
+    // Step 3: Assign tier based on final score
+    const tierResult = scoringEngine.assignTierFromScore(scoreResult.finalScore);
+
+    // Step 4: Get intent level and assign priority
+    const intentLevel = scoringEngine.getIntentLevel(prospect.intentSignal);
+    const priorityResult = scoringEngine.assignPriorityFromTierAndIntent(
+      tierResult.tier,
+      prospect.intentSignal
+    );
+
+    // Step 5: Update prospect with all scoring results
+    const updateData = {
+      finalScore: scoreResult.finalScore,
+      scoringMetadata: scoreResult.metadata,
+      status: "active",
+      clvRanking: tierResult.tier,
+      salesPriority: priorityResult.priority,
+    };
+
+    return await prospectRepository.update(id, updateData);
+  },
+
+  // ── FR-6.2: Bulk recalculate scores for all prospects ────────────────────
+  bulkRecalculateScores: async (filter = {}) => {
+    // Fetch all prospects matching filter
+    const { prospects } = await prospectRepository.findAll({
+      filter,
+      page: 1,
+      limit: 999999,
+    });
+
+    const results = {
+      total: prospects.length,
+      updated: 0,
+      disqualified: 0,
+      errors: [],
+    };
+
+    // Recalculate score for each prospect
+    for (const prospect of prospects) {
+      try {
+        // Calculate score
+        const scoreResult = scoringEngine.calculateFinalScore(prospect);
+
+        // Prepare update data
+        let updateData = {
+          finalScore: scoreResult.finalScore,
+          scoringMetadata: scoreResult.metadata,
+        };
+
+        // If disqualified
+        if (scoreResult.status === "disqualified") {
+          updateData = {
+            ...updateData,
+            status: "disqualified",
+            disqualificationReason: scoreResult.disqualificationReason,
+            disqualifiedAt: new Date(),
+          };
+          results.disqualified++;
+        } else {
+          // If active, assign tier and priority
+          const tierResult = scoringEngine.assignTierFromScore(scoreResult.finalScore);
+          const priorityResult = scoringEngine.assignPriorityFromTierAndIntent(
+            tierResult.tier,
+            prospect.intentSignal
+          );
+
+          updateData = {
+            ...updateData,
+            status: "active",
+            clvRanking: tierResult.tier,
+            salesPriority: priorityResult.priority,
+          };
+        }
+
+        // Update in DB
+        await prospectRepository.update(prospect._id, updateData);
+        results.updated++;
+      } catch (err) {
+        results.errors.push({
+          prospectId: prospect._id,
+          accountName: prospect.accountName,
+          error: err.message,
+        });
+      }
+    }
+
+    return results;
+  },
+
+  // ── FR-6.3: Get score breakdown for debugging ──────────────────────────
+  getScoreBreakdown: async (id) => {
+    const prospect = await prospectRepository.findById(id);
+    if (!prospect) {
+      const error = new Error("Prospect not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const scoreResult = scoringEngine.calculateFinalScore(prospect);
+    const tierResult = scoreResult.finalScore > 0 
+      ? scoringEngine.assignTierFromScore(scoreResult.finalScore)
+      : null;
+    
+    const priorityResult = tierResult
+      ? scoringEngine.assignPriorityFromTierAndIntent(tierResult.tier, prospect.intentSignal)
+      : null;
+
+    return {
+      prospect: {
+        id: prospect._id,
+        accountName: prospect.accountName,
+        primaryIndustry: prospect.primaryIndustry,
+        annualRevenue: prospect.annualRevenue,
+        strategicValue: prospect.strategicValue,
+        financialCapacity: prospect.financialCapacity,
+      },
+      scoring: {
+        revenuePoints: scoreResult.metadata.revenuePoints || 0,
+        strategyBonus: scoreResult.metadata.strategyBonus || 0,
+        industryMultiplier: scoreResult.metadata.industryMultiplier || 1.0,
+        techFitMultiplier: scoreResult.metadata.techFitMultiplier || 0.0,
+        finalScore: scoreResult.finalScore,
+      },
+      tier: tierResult,
+      priority: priorityResult,
+      steps: scoreResult.steps,
+      metadata: scoreResult.metadata,
+    };
   },
 };
 

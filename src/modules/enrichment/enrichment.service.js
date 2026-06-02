@@ -2,6 +2,7 @@ import enrichmentRepository from "./enrichment.repository.js";
 import prospectRepository from "../prospect/prospect.repository.js";
 import notificationService from "../notification/notification.service.js";
 import auditLogService from "../auditLog/auditLog.service.js";
+import scoringEngine from "../../common/utils/scoring.js";
 
 // ── Enrichment prompt — FR-5.1, FR-5.2, FR-5.3 ───────────────────────────────
 const buildEnrichmentPrompt = (prospect) => {
@@ -40,6 +41,16 @@ Return ONLY a valid JSON object (no markdown, no explanation) with exactly these
     "strategicValue": "suggested value or null"
   }
 }`;
+};
+
+// ── Intent Signal Mapping: History Trigger → Intent Signal ────────────────
+const mapHistoryToIntent = (historyTrigger) => {
+  return scoringEngine.mapHistoryToIntent(historyTrigger);
+};
+
+// ── Service Pitch Generator: Intent → Pitch ──────────────────────────────
+const generateServicePitch = (intentSignal) => {
+  return scoringEngine.generateServicePitch(intentSignal);
 };
 
 // ── Single prospect enrich ────────────────────────────────────────────────────
@@ -110,12 +121,44 @@ const enrichSingleProspect = async (prospectId, userId) => {
     updateData.intentSignal = parsed.buyerIntentSignal;
   }
 
+  // ── NEW: Map history trigger to intent if no intent signal yet ──────────
+  if (!updateData.intentSignal && prospect.historyTrigger) {
+    const mappedIntent = mapHistoryToIntent(prospect.historyTrigger);
+    if (mappedIntent) {
+      updateData.intentSignal = mappedIntent;
+    }
+  }
+
+  // ── NEW: Auto-generate service pitch if intent signal is now set ───────
+  const intentSignal = updateData.intentSignal || prospect.intentSignal;
+  if (intentSignal && !prospect.servicePitch) {
+    const pitch = generateServicePitch(intentSignal);
+    if (pitch) {
+      updateData.servicePitch = pitch;
+    }
+  }
+
   if (parsed.priorityScore !== undefined) {
     updateData.techFitScore = parsed.priorityScore;
   }
 
   if (Object.keys(updateData).length > 0) {
     await prospectRepository.update(prospectId, updateData);
+  }
+
+  // ── NEW FR-6: Hook scoring calculation after enrichment ─────────────────
+  // Import prospectService to avoid circular dependency, use at call time
+  try {
+    // Dynamic import to avoid circular dependency
+    const { default: prospectService } = await import("../prospect/prospect.service.js");
+    if (prospectService && prospectService.calculateAndUpdateScore) {
+      // Silently calculate score — don't block enrichment if it fails
+      prospectService.calculateAndUpdateScore(prospectId).catch((err) => {
+        console.warn(`Scoring calculation failed after enrichment for ${prospectId}:`, err.message);
+      });
+    }
+  } catch (err) {
+    console.warn("Could not trigger scoring after enrichment:", err.message);
   }
 
   // ── Save enrichment record ────────────────────────────────────────────────

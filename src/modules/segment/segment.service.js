@@ -14,6 +14,16 @@ const segmentService = {
     if (filters.salesPriorities?.length) query.salesPriority   = { $in: filters.salesPriorities };
     if (filters.intentSignals?.length)   query.intentSignal    = { $in: filters.intentSignals };
     if (filters.minTechFitScore)         query.techFitScore    = { $gte: filters.minTechFitScore };
+
+    // ── NEW: Support tier filtering ──────────────────────────────────────
+    if (filters.tierFilter?.length)      query.clvRanking      = { $in: filters.tierFilter };
+
+    // ── NEW: Support priority filtering ──────────────────────────────────
+    if (filters.priorityFilter?.length)  query.salesPriority   = { $in: filters.priorityFilter };
+
+    // ── NEW: Support min final score filtering ───────────────────────────
+    if (filters.minFinalScore)           query.finalScore      = { $gte: filters.minFinalScore };
+
     return query;
   },
 
@@ -86,7 +96,7 @@ const segmentService = {
     return await segmentRepository.findById(id);
   },
 
-  // Get paginated accounts from stored snapshot — no fresh query
+  // Get paginated accounts from stored snapshot + tier breakdown
   getStoredAccounts: async (id, page = 1, limit = 10) => {
     const segment = await segmentRepository.findById(id);
     if (!segment) throw new Error("Segment not found");
@@ -99,8 +109,53 @@ const segmentService = {
 
     // Fetch only those accounts from DB
     const accounts = await Prospect.find({ _id: { $in: pageIds } })
-      .select("accountName website primaryIndustry country techFitScore salesPriority clvRanking intentSignal noOfEmployees")
+      .select("accountName website primaryIndustry country techFitScore finalScore salesPriority clvRanking intentSignal noOfEmployees")
       .lean();
+
+    // ── NEW: Calculate tier breakdown for matched accounts ────────────────
+    const tierBreakdown = await Prospect.aggregate([
+      { $match: { _id: { $in: segment.matchedAccountIds } } },
+      { $group: {
+          _id: "$clvRanking",
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    const breakdown = {
+      "Tier-A (Strategic)": 0,
+      "Tier-B (Core)": 0,
+      "Tier-C (Mass)": 0,
+    };
+    tierBreakdown.forEach(tb => {
+      if (tb._id && breakdown[tb._id] !== undefined) {
+        breakdown[tb._id] = tb.count;
+      }
+    });
+
+    // ── NEW: Calculate priority breakdown ────────────────────────────────
+    const priorityBreakdown = await Prospect.aggregate([
+      { $match: { _id: { $in: segment.matchedAccountIds } } },
+      { $group: {
+          _id: "$salesPriority",
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    const priorities = {
+      "P1 (Tier A+Active)": 0,
+      "P2 (Tier B+Active)": 0,
+      "P3 (Tier A+Cold)": 0,
+      "P4 (Tier B+Cold)": 0,
+    };
+    priorityBreakdown.forEach(pb => {
+      if (pb._id && priorities[pb._id] !== undefined) {
+        priorities[pb._id] = pb.count;
+      }
+    });
 
     return {
       accounts,
@@ -108,6 +163,8 @@ const segmentService = {
       page:       Number(page),
       limit:      Number(limit),
       totalPages: Math.ceil(total / limit),
+      tierBreakdown: breakdown,
+      priorityBreakdown: priorities,
     };
   },
 
@@ -118,8 +175,8 @@ const segmentService = {
     const [count, topAccounts] = await Promise.all([
       Prospect.countDocuments(query),
       Prospect.find(query)
-        .select("accountName primaryIndustry techFitScore salesPriority country")
-        .sort({ techFitScore: -1 })
+        .select("accountName primaryIndustry techFitScore finalScore salesPriority clvRanking country")
+        .sort({ finalScore: -1 })
         .limit(5)
         .lean(),
     ]);

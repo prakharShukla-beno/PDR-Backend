@@ -79,6 +79,70 @@ const prospectController = {
       res.send(buffer);
     } catch (error) { next(error); }
   },
+
+  // POST /api/prospects/calculate-score/:id — Recalculate score for 1 prospect
+  calculateScore: async (req, res, next) => {
+    try {
+      const result = await prospectService.calculateAndUpdateScore(req.params.id);
+      res.status(200).json({
+        success: true,
+        message: "Score calculated and updated successfully",
+        data: result,
+      });
+    } catch (error) { next(error); }
+  },
+
+  // POST /api/prospects/re-tier — Bulk recalculate scores
+  bulkReTier: async (req, res, next) => {
+    try {
+      const filter = req.body.filter || {};
+      const results = await prospectService.bulkRecalculateScores(filter);
+      res.status(200).json({
+        success: true,
+        message: `Re-tiered ${results.updated} prospects`,
+        data: results,
+      });
+    } catch (error) { next(error); }
+  },
+
+  // GET /api/prospects/:id/score-breakdown — Get score formula breakdown
+  getScoreBreakdown: async (req, res, next) => {
+    try {
+      const breakdown = await prospectService.getScoreBreakdown(req.params.id);
+      res.status(200).json({
+        success: true,
+        data: breakdown,
+      });
+    } catch (error) { next(error); }
+  },
+
+  // PUT /api/prospects/:id/override-tier — Manual tier override
+  overrideTier: async (req, res, next) => {
+    try {
+      const { clvRanking, salesPriority, overrideReason } = req.body;
+
+      if (!clvRanking || !salesPriority || !overrideReason) {
+        return res.status(400).json({
+          success: false,
+          message: "Missing required fields: clvRanking, salesPriority, overrideReason",
+        });
+      }
+
+      const updated = await prospectService.update(req.params.id, {
+        clvRanking,
+        salesPriority,
+        overriddenAt: new Date(),
+        overriddenBy: req.user._id,
+        overrideReason,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "Tier overridden successfully",
+        data: updated,
+      });
+    } catch (error) { next(error); }
+  },
 };
 
 export default prospectController;

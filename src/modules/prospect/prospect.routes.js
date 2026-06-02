@@ -15,6 +15,13 @@ const createValidation = [
 // Export must be before /:id to avoid route conflict
 router.get("/export",  prospectController.export);
 
+// ── FR-6: Scoring & Tiering Endpoints ────────────────────────────────────
+router.post("/calculate-score/:id", prospectController.calculateScore);
+router.post("/re-tier", prospectController.bulkReTier);
+router.get("/:id/score-breakdown", prospectController.getScoreBreakdown);
+router.put("/:id/override-tier", prospectController.overrideTier);
+
+// ── Standard CRUD Routes ─────────────────────────────────────────────────
 router.post("/",       createValidation, prospectController.create);
 router.get("/",        prospectController.getAll);
 router.get("/:id",     prospectController.getById);
