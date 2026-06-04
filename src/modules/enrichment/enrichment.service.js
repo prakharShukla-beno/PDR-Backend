@@ -1,8 +1,8 @@
-import enrichmentRepository from "./enrichment.repository.js";
-import prospectRepository from "../prospect/prospect.repository.js";
-import notificationService from "../notification/notification.service.js";
-import auditLogService from "../auditLog/auditLog.service.js";
-import scoringEngine from "../../common/utils/scoring.js";
+import enrichmentRepository  from "./enrichment.repository.js";
+import prospectRepository    from "../prospect/prospect.repository.js";
+import { calculateScore }    from "../../common/utils/scoring.js";
+import notificationService   from "../notification/notification.service.js";
+import auditLogService       from "../auditLog/auditLog.service.js";
 
 // ── Enrichment prompt — FR-5.1, FR-5.2, FR-5.3 ───────────────────────────────
 const buildEnrichmentPrompt = (prospect) => {
@@ -30,27 +30,16 @@ Return ONLY a valid JSON object (no markdown, no explanation) with exactly these
   "buyerIntentSignal": "one of: Hyper-Growth Mode | Cost Containment | Risk Mitigation | Modernization Mandate | null",
   "strategicCategory": "one of: High Value | Watch List | Not a Fit | null",
   "icpMatch": true or false,
-  "priorityScore": integer between 0 and 100,
   "missingFieldSuggestions": {
     "primaryIndustry": "suggested value or null",
     "annualRevenue": "suggested value or null",
     "noOfEmployees": "suggested value or null",
-    "techAdoptionProfile": "suggested value or null",
-    "financialCapacity": "suggested value or null",
-    "marginPotential": "suggested value or null",
-    "strategicValue": "suggested value or null"
+    "techAdoptionProfile": "one of: Innovator | Early Adopter | Mainstream | Laggard | Leapfrog | null",
+    "financialCapacity": "one of: Enterprise | Mid-Market | Small Business | null",
+    "marginPotential": "one of: High Margins | Standard Margins | Low Margins | null",
+    "strategicValue": "one of: Market Maker | VC Backed | Standard | null"
   }
 }`;
-};
-
-// ── Intent Signal Mapping: History Trigger → Intent Signal ────────────────
-const mapHistoryToIntent = (historyTrigger) => {
-  return scoringEngine.mapHistoryToIntent(historyTrigger);
-};
-
-// ── Service Pitch Generator: Intent → Pitch ──────────────────────────────
-const generateServicePitch = (intentSignal) => {
-  return scoringEngine.generateServicePitch(intentSignal);
 };
 
 // ── Single prospect enrich ────────────────────────────────────────────────────
@@ -98,6 +87,7 @@ const enrichSingleProspect = async (prospectId, userId) => {
   }
 
   // ── FR-5.1 & FR-5.2: Fill missing fields using AI suggestions ────────────
+  // Only fill fields that are currently empty — never overwrite existing data
   const updateData = {};
   const suggestions = parsed.missingFieldSuggestions || {};
 
@@ -121,45 +111,35 @@ const enrichSingleProspect = async (prospectId, userId) => {
     updateData.intentSignal = parsed.buyerIntentSignal;
   }
 
-  // ── NEW: Map history trigger to intent if no intent signal yet ──────────
-  if (!updateData.intentSignal && prospect.historyTrigger) {
-    const mappedIntent = mapHistoryToIntent(prospect.historyTrigger);
-    if (mappedIntent) {
-      updateData.intentSignal = mappedIntent;
-    }
-  }
+  // ── BUG FIX: Old code was saving AI's priorityScore into techFitScore ─────
+  // That was wrong — priorityScore is a general AI opinion, not a tech fit score
+  // We removed that line. techFitScore is now calculated by our formula below.
 
-  // ── NEW: Auto-generate service pitch if intent signal is now set ───────
-  const intentSignal = updateData.intentSignal || prospect.intentSignal;
-  if (intentSignal && !prospect.servicePitch) {
-    const pitch = generateServicePitch(intentSignal);
-    if (pitch) {
-      updateData.servicePitch = pitch;
-    }
-  }
-
-  if (parsed.priorityScore !== undefined) {
-    updateData.techFitScore = parsed.priorityScore;
-  }
-
+  // Save AI-filled fields to DB first
   if (Object.keys(updateData).length > 0) {
     await prospectRepository.update(prospectId, updateData);
   }
 
-  // ── NEW FR-6: Hook scoring calculation after enrichment ─────────────────
-  // Import prospectService to avoid circular dependency, use at call time
-  try {
-    // Dynamic import to avoid circular dependency
-    const { default: prospectService } = await import("../prospect/prospect.service.js");
-    if (prospectService && prospectService.calculateAndUpdateScore) {
-      // Silently calculate score — don't block enrichment if it fails
-      prospectService.calculateAndUpdateScore(prospectId).catch((err) => {
-        console.warn(`Scoring calculation failed after enrichment for ${prospectId}:`, err.message);
-      });
-    }
-  } catch (err) {
-    console.warn("Could not trigger scoring after enrichment:", err.message);
-  }
+  // ── SCORING HOOK: Run formula after AI fills the fields ───────────────────
+  // Now that AI has filled financialCapacity, strategicValue, marginPotential,
+  // techAdoptionProfile etc., we can run the scoring formula.
+  //
+  // This is how "WITH AI" scoring works:
+  //   1. AI fills the input fields
+  //   2. We run calculateScore() on the updated prospect
+  //   3. techFitScore, finalScore, clvRanking, salesPriority are saved
+  //
+  // Get the updated prospect (with AI-filled fields merged in)
+  const updatedProspect = { ...prospect.toObject(), ...updateData };
+  const scoreResult     = calculateScore(updatedProspect);
+
+  // Save scoring outputs to DB
+  await prospectRepository.update(prospectId, {
+    techFitScore:  scoreResult.techFitScore,
+    finalScore:    scoreResult.finalScore,
+    clvRanking:    scoreResult.clvRanking,
+    salesPriority: scoreResult.salesPriority,
+  });
 
   // ── Save enrichment record ────────────────────────────────────────────────
   const enrichment = await enrichmentRepository.create({
@@ -170,7 +150,8 @@ const enrichSingleProspect = async (prospectId, userId) => {
     intentSignals:     parsed.intentSignals     || [],
     strategicCategory: parsed.strategicCategory || null,
     icpMatch:          parsed.icpMatch          ?? false,
-    priorityScore:     parsed.priorityScore     || 0,
+    // Store the calculated score in enrichment record too (for history)
+    priorityScore:     scoreResult.finalScore   || 0,
     rawResponse:       parsed,
   });
 
@@ -180,12 +161,15 @@ const enrichSingleProspect = async (prospectId, userId) => {
     action:      "UPDATE",
     entity:      "Prospect",
     entityId:    prospectId,
-    description: `AI enrichment completed for "${prospect.accountName}"`,
+    description: `AI enrichment + scoring completed for "${prospect.accountName}"`,
     metadata: {
-      fieldsUpdated: Object.keys(updateData),
-      intentSignals: parsed.intentSignals || [],
-      priorityScore: parsed.priorityScore,
-      icpMatch:      parsed.icpMatch,
+      fieldsUpdated:  Object.keys(updateData),
+      intentSignals:  parsed.intentSignals || [],
+      finalScore:     scoreResult.finalScore,
+      clvRanking:     scoreResult.clvRanking,
+      salesPriority:  scoreResult.salesPriority,
+      disqualified:   scoreResult.disqualified,
+      icpMatch:       parsed.icpMatch,
     },
   });
 

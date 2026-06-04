@@ -63,9 +63,10 @@ const prospectSchema = new mongoose.Schema(
     },
 
     // ── Tech Stack ───────────────────────────────────────────────────────────
-    primaryTechStack:   { type: String, trim: true, default: null },
-    secondaryTechStack: { type: String, trim: true, default: null },
-    tertiaryTechStack:  { type: String, trim: true, default: null },
+    // Multi-select arrays — e.g. ["AWS", "React", "MongoDB"]
+    primaryTechStack:   { type: [String], default: [] },
+    secondaryTechStack: { type: [String], default: [] },
+    tertiaryTechStack:  { type: [String], default: [] },
     techAdoptionProfile: {
       type: String,
       enum: ["Innovator", "Early Adopter", "Mainstream", "Laggard", "Leapfrog", null],
@@ -120,7 +121,12 @@ const prospectSchema = new mongoose.Schema(
     },
     intentSignal: {
       type: String,
-      enum: ["Hyper-Growth Mode", "Cost Containment", "Risk Mitigation", "Modernization Mandate", null],
+      enum: [
+        "Hyper-Growth Mode", "Cost Containment", "Risk Mitigation",
+        "Modernization Mandate", "Capital Event", "Regulatory Action",
+        "Earnings Shock", "Strategic Pivot", "Security Incident",
+        "Job Postings", null,
+      ],
       default: null,
     },
     servicePitch: {
@@ -145,49 +151,14 @@ const prospectSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ── Account Scoring & Tiering ───────────────────────────────────────────
-    finalScore: {
-      type: Number,
-      min: 0,
-      max: 100,
-      default: null,
-    },
-
-    scoringMetadata: {
-      revenuePoints: Number,
-      strategyBonus: Number,
-      industryMultiplier: Number,
-      techFitMultiplier: Number,
-      calculatedAt: Date,
-    },
-
-    status: {
-      type: String,
-      enum: ["active", "disqualified", "archived"],
-      default: "active",
-    },
-
-    disqualificationReason: {
-      type: String,
-      enum: [
-        "Tech Stack Incompatible",
-        "Already Client",
-        "Invalid/Duplicate",
-        "Out of Market",
-        null,
-      ],
-      default: null,
-    },
-
-    disqualifiedAt: Date,
-
     // ── Relational References ────────────────────────────────────────────────
     // contacts[] array removed — contacts are stored in the separate Contact collection
     // Account detail page: GET /api/contacts?accountId=xxx
     importLogId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ImportLog",
-      required: [true, "Import log reference is required"],
+      default: null,
+      // Optional — only set for Excel/import records, null for manual entries
     },
     assignedTo: {
       type: mongoose.Schema.Types.ObjectId,
@@ -201,9 +172,8 @@ const prospectSchema = new mongoose.Schema(
     isDuplicate: { type: Boolean, default: false },
     source: {
       type: String,
-      required: [true, "Source is required"],
-      enum: ["excel", "apollo", "zoominfo", "manual"],
-      default: "excel",
+      enum: ["excel", "apollo", "zoominfo", "manual", "linkedin", "referral", "website", "event", "other", null],
+      default: "manual",
     },
   },
   { timestamps: true }
@@ -233,7 +203,7 @@ prospectSchema.pre("insertMany", function (next, docs) {
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 prospectSchema.index({ accountName: "text", website: "text" });
 prospectSchema.index({ accountName: 1 });
-prospectSchema.index({ accountNameLower: 1 });   // for exact match
+prospectSchema.index({ accountNameLower: 1 });   // exact match ke liye
 prospectSchema.index({ website: 1 });
 prospectSchema.index({ isDuplicate: 1 });
 prospectSchema.index({ primaryIndustry: 1 });
@@ -246,10 +216,10 @@ prospectSchema.index({ businessModel: 1 });
 prospectSchema.index({ noOfEmployees: 1 });
 prospectSchema.index({ annualRevenue: 1 });
 prospectSchema.index({ techFitScore: 1 });
+prospectSchema.index({ finalScore: 1 });
+prospectSchema.index({ technologyAlignment: 1 });
 prospectSchema.index({ assignedTo: 1 });
 prospectSchema.index({ source: 1 });
-prospectSchema.index({ finalScore: 1 });
-prospectSchema.index({ status: 1 });
 
 const Prospect = mongoose.model("Prospect", prospectSchema);
 export default Prospect;

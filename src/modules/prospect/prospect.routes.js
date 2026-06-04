@@ -1,7 +1,7 @@
 import { Router } from "express";
-import { body } from "express-validator";
+import { body }   from "express-validator";
 import prospectController from "./prospect.controller.js";
-import authMiddleware from "../../common/middlewares/auth.middleware.js";
+import authMiddleware     from "../../common/middlewares/auth.middleware.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -12,20 +12,34 @@ const createValidation = [
   body("techFitScore").optional().isInt({ min: 0, max: 100 }).withMessage("Tech fit score must be between 0 and 100"),
 ];
 
-// Export must be before /:id to avoid route conflict
-router.get("/export",  prospectController.export);
+// ── These 3 routes must come BEFORE /:id routes ───────────────────────────────
+// Otherwise Express will try to match "export", "re-tier" as an :id param
 
-// ── FR-6: Scoring & Tiering Endpoints ────────────────────────────────────
-router.post("/calculate-score/:id", prospectController.calculateScore);
+// Download all prospects as Excel
+router.get("/export",   prospectController.export);
+
+// Run scoring formula on ALL prospects and save results
+// POST body: {} (no body needed, processes everything)
 router.post("/re-tier", prospectController.bulkReTier);
-router.get("/:id/score-breakdown", prospectController.getScoreBreakdown);
-router.put("/:id/override-tier", prospectController.overrideTier);
 
-// ── Standard CRUD Routes ─────────────────────────────────────────────────
-router.post("/",       createValidation, prospectController.create);
-router.get("/",        prospectController.getAll);
-router.get("/:id",     prospectController.getById);
-router.put("/:id",     prospectController.update);
-router.delete("/:id",  prospectController.delete);
+// ── Standard CRUD ─────────────────────────────────────────────────────────────
+router.post("/",        createValidation, prospectController.create);
+router.get("/",         prospectController.getAll);
+router.get("/:id",      prospectController.getById);
+router.put("/:id",      prospectController.update);
+router.delete("/:id",   prospectController.delete);
+
+// ── Scoring routes — must come AFTER /:id to avoid conflict ───────────────────
+
+// Calculate and save score for one prospect
+// Returns score + full breakdown
+router.post("/:id/calculate-score", prospectController.calculateScore);
+
+// Get score breakdown without saving (read-only, for display)
+router.get("/:id/score-breakdown",  prospectController.getScoreBreakdown);
+
+// Manually override tier/priority (when formula result is wrong)
+// Body: { clvRanking, salesPriority, overrideReason }
+router.put("/:id/override-tier",    prospectController.overrideTier);
 
 export default router;

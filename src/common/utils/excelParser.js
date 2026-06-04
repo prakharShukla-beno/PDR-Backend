@@ -117,7 +117,13 @@ const ENUM_FIELDS = {
   servicePitch:        ["Speed & Capacity", "Automation & Outsourcing", "Security & Compliance", "Future-Proofing", "Data Unification"],
   clvRanking:          ["Tier-A (Strategic)", "Tier-B (Core)", "Tier-C (Mass)"],
   salesPriority:       ["P1 (Tier A+Active)", "P2 (Tier B+Active)", "P3 (Tier A+Cold)", "P4 (Tier B+Cold)"],
+  technologyAlignment: ["Core Match", "Adjacent Match", "No Match"],
   "contact.seniority": ["C-Suite", "VP", "Director", "Manager", "Individual Contributor"],
+  // Tech alignment — direct scoring input
+  "technology alignment":  "technologyAlignment",
+  "technologyalignment":   "technologyAlignment",
+  "tech alignment":        "technologyAlignment",
+
   // NOTE: primaryTechStack enum removed — client file uses free text for tech stack
 };
 
@@ -166,6 +172,15 @@ const mapRowToSchema = (rawRow) => {
     mapped.contacts = [contact];
   }
 
+  // Parse comma-separated tech values into arrays
+  // "AWS, React, MongoDB" → ["AWS", "React", "MongoDB"]
+  for (const field of ["primaryTechStack", "secondaryTechStack", "tertiaryTechStack"]) {
+    if (mapped[field] && typeof mapped[field] === "string") {
+      const arr = mapped[field].split(",").map(s => s.trim()).filter(Boolean);
+      mapped[field] = arr.length > 0 ? arr : null;
+    }
+  }
+
   return mapped;
 };
 
@@ -176,7 +191,7 @@ const validateRow = (row, rowNumber) => {
     errors.push(`Row ${rowNumber}: accountName is required`);
   }
 
-  // Enum check — only for defined fields
+  // Enum check — sirf defined fields ke liye
   for (const [field, allowedValues] of Object.entries(ENUM_FIELDS)) {
     const value = field.startsWith("contact.")
       ? row.contacts?.[0]?.[field.split(".")[1]]

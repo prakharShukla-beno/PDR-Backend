@@ -68,78 +68,83 @@ const prospectController = {
   },
 
   // GET /api/prospects/export — download all prospects as Excel file
-  // Supports same filters as getAll
   export: async (req, res, next) => {
     try {
       const { buffer, filename } = await prospectService.exportToExcel(req.query);
-
-      // Set response headers so browser downloads the file
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.send(buffer);
     } catch (error) { next(error); }
   },
 
-  // POST /api/prospects/calculate-score/:id — Recalculate score for 1 prospect
+  // ── NEW: POST /api/prospects/calculate-score/:id ─────────────────────────────
+  // Runs the scoring formula on one prospect and saves results to DB
+  //
+  // When to call this from frontend:
+  //   - User clicks "Calculate Score" button on account detail page
+  //   - After user manually fills financialCapacity / strategicValue / marginPotential
+  //   - After AI enrichment (enrichment.service.js calls this automatically)
   calculateScore: async (req, res, next) => {
     try {
-      const result = await prospectService.calculateAndUpdateScore(req.params.id);
+      const result = await prospectService.calculateAndSaveScore(req.params.id);
+
       res.status(200).json({
         success: true,
-        message: "Score calculated and updated successfully",
-        data: result,
+        message: result.disqualified
+          ? "Account disqualified — no tech fit match"
+          : `Score calculated: ${result.finalScore} → ${result.clvRanking}`,
+        data: {
+          finalScore:    result.finalScore,
+          techFitScore:  result.techFitScore,
+          clvRanking:    result.clvRanking,
+          salesPriority: result.salesPriority,
+          disqualified:  result.disqualified,
+          breakdown:     result.breakdown,
+        },
       });
     } catch (error) { next(error); }
   },
 
-  // POST /api/prospects/re-tier — Bulk recalculate scores
-  bulkReTier: async (req, res, next) => {
-    try {
-      const filter = req.body.filter || {};
-      const results = await prospectService.bulkRecalculateScores(filter);
-      res.status(200).json({
-        success: true,
-        message: `Re-tiered ${results.updated} prospects`,
-        data: results,
-      });
-    } catch (error) { next(error); }
-  },
-
-  // GET /api/prospects/:id/score-breakdown — Get score formula breakdown
+  // ── NEW: GET /api/prospects/:id/score-breakdown ───────────────────────────────
+  // Returns step-by-step explanation of how score was calculated
+  // Used by frontend scoring tab — does NOT save anything to DB
+  //
+  // Example response:
+  //   breakdown.formula = "((25 + 20) × 1.2) × 1.0 = 54"
+  //   breakdown.techFit = { multiplier: 1.0, label: "Core Match" }
+  //   breakdown.financial = { points: 25, label: "Mid-Market" }
   getScoreBreakdown: async (req, res, next) => {
     try {
-      const breakdown = await prospectService.getScoreBreakdown(req.params.id);
+      const result = await prospectService.getScoreBreakdown(req.params.id);
+      res.status(200).json({ success: true, data: result });
+    } catch (error) { next(error); }
+  },
+
+  // ── NEW: PUT /api/prospects/:id/override-tier ─────────────────────────────────
+  // Lets a salesperson manually override the tier/priority
+  // Body: { clvRanking, salesPriority, overrideReason }
+  overrideTier: async (req, res, next) => {
+    try {
+      const updated = await prospectService.overrideTier(req.params.id, req.body);
       res.status(200).json({
         success: true,
-        data: breakdown,
+        message: "Tier manually overridden",
+        data:    updated,
       });
     } catch (error) { next(error); }
   },
 
-  // PUT /api/prospects/:id/override-tier — Manual tier override
-  overrideTier: async (req, res, next) => {
+  // ── NEW: POST /api/prospects/re-tier ─────────────────────────────────────────
+  // Runs scoring formula on ALL prospects in DB and saves results
+  // Used when formula changes or "Re-Tier All" button clicked
+  // Warning: slow on large datasets — runs one by one
+  bulkReTier: async (req, res, next) => {
     try {
-      const { clvRanking, salesPriority, overrideReason } = req.body;
-
-      if (!clvRanking || !salesPriority || !overrideReason) {
-        return res.status(400).json({
-          success: false,
-          message: "Missing required fields: clvRanking, salesPriority, overrideReason",
-        });
-      }
-
-      const updated = await prospectService.update(req.params.id, {
-        clvRanking,
-        salesPriority,
-        overriddenAt: new Date(),
-        overriddenBy: req.user._id,
-        overrideReason,
-      });
-
+      const results = await prospectService.bulkReTier();
       res.status(200).json({
         success: true,
-        message: "Tier overridden successfully",
-        data: updated,
+        message: `Re-tier complete — ${results.success} updated, ${results.failed} failed`,
+        data:    results,
       });
     } catch (error) { next(error); }
   },
