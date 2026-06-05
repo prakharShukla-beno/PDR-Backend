@@ -21,9 +21,21 @@ const icpSchema = new mongoose.Schema(
     industries: {
       type: [String],
       enum: [
-        "BFSI", "IT & ITES", "SaaS", "Fintech", "E-commerce",
-        "Healthcare", "EdTech", "Logistics", "Manufacturing",
-        "Retail & CPG", "Media & Telecom", "Real Estate",
+        "BFSI",
+        "IT & ITES",
+        "Media & Telecom",
+        "Healthcare & Life Sciences",
+        "Manufacturing & Automotive",
+        "Travel, Transport & Logistics",
+        "Real Estate & Construction",
+        "Public Sector, Gov & Education",
+        "Professional Services",
+        "Energy, Resources & Utilities",
+        "Retail & CPG",
+        "SaaS",
+        "Fintech",
+        "E-commerce",
+        "EdTech",
       ],
       default: [],
     },
@@ -57,6 +69,27 @@ const icpSchema = new mongoose.Schema(
     // Countries: include = match, exclude = block (separate from region logic)
     targetCountriesInclude: { type: [String], default: [] },
     targetCountriesExclude: { type: [String], default: [] },
+
+    // ── Commercial Category ─────────────────────────────────────────────────
+    commercialCategories: {
+      type: [String],
+      enum: [
+        "Product Led", "SaaS / Subscriptions", "Professional Services",
+        "Retail / E-Com", "Network / Platform", "Regulated (Health/Fin)", "Public / Gov",
+      ],
+      default: [],
+    },
+
+    // ── Tech Fit — include/exclude specific tools per category ───────────────
+    // techStackInclude: tools the prospect MUST use (Core Match)
+    // techStackExclude: tools that disqualify the prospect (No Match)
+    techStackInclude: { type: [String], default: [] },
+    techStackExclude: { type: [String], default: [] },
+
+    // Tech category level include/exclude (Cloud Provider, CRM, Database etc.)
+    // Frontend mein region jaisa UI — category include/exclude + individual tool exclude
+    techCategoriesInclude: { type: [String], default: [] },
+    techCategoriesExclude: { type: [String], default: [] },
 
     // ── Buyer Persona ────────────────────────────────────────────────────────
     buyerPersona: {

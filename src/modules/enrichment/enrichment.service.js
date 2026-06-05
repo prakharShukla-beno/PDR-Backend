@@ -25,8 +25,7 @@ Prospect Data:
 
 Return ONLY a valid JSON object (no markdown, no explanation) with exactly these fields:
 {
-  "techStack": ["string array of inferred tech tools/platforms they likely use"],
-  "intentSignals": ["string array of buyer intent indicators — e.g. hiring patterns, funding events, product launches"],
+"techStack": ["string array of specific tech tools this company likely uses — e.g. AWS, Salesforce, React, PostgreSQL, Docker, HubSpot. Be specific, not generic. Return 4-10 tools based on their industry, size, and business model."],  "intentSignals": ["string array of buyer intent indicators — e.g. hiring patterns, funding events, product launches"],
   "buyerIntentSignal": "one of: Hyper-Growth Mode | Cost Containment | Risk Mitigation | Modernization Mandate | null",
   "strategicCategory": "one of: High Value | Watch List | Not a Fit | null",
   "icpMatch": true or false,
@@ -86,8 +85,6 @@ const enrichSingleProspect = async (prospectId, userId) => {
     throw new Error("Could not parse Gemini response as JSON");
   }
 
-  // ── FR-5.1 & FR-5.2: Fill missing fields using AI suggestions ────────────
-  // Only fill fields that are currently empty — never overwrite existing data
   const updateData = {};
   const suggestions = parsed.missingFieldSuggestions || {};
 
@@ -111,9 +108,6 @@ const enrichSingleProspect = async (prospectId, userId) => {
     updateData.intentSignal = parsed.buyerIntentSignal;
   }
 
-  // ── BUG FIX: Old code was saving AI's priorityScore into techFitScore ─────
-  // That was wrong — priorityScore is a general AI opinion, not a tech fit score
-  // We removed that line. techFitScore is now calculated by our formula below.
 
   // Save AI-filled fields to DB first
   if (Object.keys(updateData).length > 0) {

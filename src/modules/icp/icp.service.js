@@ -89,6 +89,8 @@ const icpService = {
       filter.primaryIndustry = { $in: profile.industries };
     if (profile.businessModels?.length > 0)
       filter.businessModel   = { $in: profile.businessModels };
+    if (profile.commercialCategories?.length > 0)
+      filter.commercialCategory = { $in: profile.commercialCategories };
     if (profile.annualRevenues?.length > 0)
       filter.annualRevenue   = { $in: profile.annualRevenues };
     if (profile.employeeRanges?.length > 0)
@@ -124,6 +126,19 @@ const icpService = {
       filter.country = { $nin: allExcluded };
     }
     // If neither — no country filter applied (match all countries)
+
+    // ── Tech Fit filter ────────────────────────────────────────────────────────
+    // techStackInclude: prospect must have AT LEAST ONE of these tools (Core/Adjacent Match)
+    // techStackExclude: prospect must NOT have ANY of these tools (disqualifies)
+    if (profile.techStackInclude?.length > 0) {
+      filter.primaryTechStack = { $in: profile.techStackInclude };
+    }
+    if (profile.techStackExclude?.length > 0) {
+      filter.primaryTechStack = {
+        ...filter.primaryTechStack,
+        $nin: profile.techStackExclude,
+      };
+    }
 
     const skip = (Number(page) - 1) * Number(limit);
 

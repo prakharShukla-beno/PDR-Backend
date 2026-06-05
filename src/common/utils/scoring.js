@@ -33,15 +33,48 @@
 //
 // FIX: technologyAlignment is the correct field per requirement
 // techAdoptionProfile is only a fallback
-const getTechFitMultiplier = (prospect) => {
+const getTechFitMultiplier = (prospect, icpTechInclude = [], icpTechExclude = []) => {
 
-  // Primary: direct alignment field
+  const prospectStack = prospect.primaryTechStack || [];
+
+  // ── ICP-based Tech Fit (highest priority) ────────────────────────────────
+  // If ICP has tech lists defined, compare prospect stack against them
+  if (icpTechInclude.length > 0 || icpTechExclude.length > 0) {
+
+    // Disqualify if prospect uses any excluded tool
+    const usesExcluded = icpTechExclude.some(t => prospectStack.includes(t));
+    if (usesExcluded) {
+      const matched = icpTechExclude.filter(t => prospectStack.includes(t));
+      return { multiplier: 0.0, label: `No Match — uses excluded tools: ${matched.join(", ")}` };
+    }
+
+    if (icpTechInclude.length > 0) {
+      const matchedTools = icpTechInclude.filter(t => prospectStack.includes(t));
+      const matchRatio   = matchedTools.length / icpTechInclude.length;
+
+      // Core Match: uses 50%+ of required tools
+      if (matchRatio >= 0.5)
+        return { multiplier: 1.0, label: `Core Match — ${matchedTools.length}/${icpTechInclude.length} tools matched: ${matchedTools.join(", ")}` };
+
+      // Adjacent Match: uses at least 1 required tool
+      if (matchedTools.length > 0)
+        return { multiplier: 0.5, label: `Adjacent Match — ${matchedTools.length}/${icpTechInclude.length} tools matched: ${matchedTools.join(", ")}` };
+
+      // No tools matched — but not excluded either → Adjacent by default
+      return { multiplier: 0.5, label: "Adjacent Match — no included tools found, but not disqualified" };
+    }
+
+    // Only exclusions defined, none matched — keep prospect
+    return { multiplier: 1.0, label: "Core Match — passes exclusion check" };
+  }
+
+  // ── Fallback: use technologyAlignment field (manual entry) ───────────────
   const alignment = prospect.technologyAlignment;
   if (alignment === "Core Match")     return { multiplier: 1.0, label: "Core Match" };
   if (alignment === "Adjacent Match") return { multiplier: 0.5, label: "Adjacent Match" };
   if (alignment === "No Match")       return { multiplier: 0.0, label: "No Match — Disqualified" };
 
-  // Secondary: manually entered score
+  // ── Fallback: manually entered techFitScore ───────────────────────────────
   const score = prospect.techFitScore;
   if (score !== null && score !== undefined) {
     if (score >= 90) return { multiplier: 1.0, label: `Core Match (score: ${score})` };
@@ -49,14 +82,14 @@ const getTechFitMultiplier = (prospect) => {
     return            { multiplier: 0.0, label: `No Match (score: ${score}) — Disqualified` };
   }
 
-  // Fallback: adoption profile
-  const profile = prospect.techAdoptionProfile;
-  if (!profile) return { multiplier: 0.5, label: "Not assessed — Adjacent by default" };
-  if (["Innovator", "Early Adopter"].includes(profile))
-    return { multiplier: 1.0, label: `Core Match (profile: ${profile})` };
-  if (profile === "Mainstream")
-    return { multiplier: 0.5, label: `Adjacent Match (profile: ${profile})` };
-  return { multiplier: 0.0, label: `No Match (profile: ${profile}) — Disqualified` };
+  // ── Fallback: tech adoption profile ──────────────────────────────────────
+  const adoptionProfile = prospect.techAdoptionProfile;
+  if (!adoptionProfile) return { multiplier: 0.5, label: "Not assessed — Adjacent by default" };
+  if (["Innovator", "Early Adopter"].includes(adoptionProfile))
+    return { multiplier: 1.0, label: `Core Match (profile: ${adoptionProfile})` };
+  if (adoptionProfile === "Mainstream")
+    return { multiplier: 0.5, label: `Adjacent Match (profile: ${adoptionProfile})` };
+  return { multiplier: 0.0, label: `No Match (profile: ${adoptionProfile}) — Disqualified` };
 };
 
 
@@ -172,10 +205,14 @@ const getPriorityFromTierAndIntent = (clvRanking, intentSignal) => {
 //   Output: { finalScore: 54, clvRanking: "Tier-B (Core)",
 //              salesPriority: "P2 (Tier B+Active)",
 //              breakdown: { formula: "((25+20)×1.2)×1.0 = 54" } }
-export const calculateScore = (prospect) => {
+// icpProfile is optional — pass it to enable ICP-based tech fit comparison
+export const calculateScore = (prospect, icpProfile = null) => {
+
+  const icpTechInclude = icpProfile?.techStackInclude || [];
+  const icpTechExclude = icpProfile?.techStackExclude || [];
 
   // STEP 1 — Tech Fit (gatekeeper)
-  const techFit = getTechFitMultiplier(prospect);
+  const techFit = getTechFitMultiplier(prospect, icpTechInclude, icpTechExclude);
 
   if (techFit.multiplier === 0) {
     return {

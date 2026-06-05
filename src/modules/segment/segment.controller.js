@@ -56,7 +56,7 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // GET /api/segments/:id/accounts — paginated stored accounts (no fresh query)
+  // GET /api/segments/:id/accounts — paginated stored accounts + tier breakdown
   getAccounts: async (req, res, next) => {
     try {
       const { page = 1, limit = 10 } = req.query;
@@ -85,6 +85,32 @@ const segmentController = {
       const result = await segmentService.preview(req.body.filters || {});
       res.status(200).json({ success: true, data: result });
     } catch (error) { next(error); }
+  },
+
+  // POST /api/segments/:id/enrich-score
+  // Segment ke matched accounts pe enrichment + tech fit scoring chalaao
+  // Background mein run hota hai — turant 202 return karta hai
+  enrichAndScore: async (req, res, next) => {
+    try {
+      const result = await segmentService.enrichAndScore(
+        req.params.id,
+        req.user._id
+      );
+      res.status(202).json({
+        success: true,
+        message: result.message,
+        data:    result,
+      });
+    } catch (error) {
+      // Already running check
+      if (error.message === "Enrichment already running for this segment") {
+        return res.status(409).json({
+          success: false,
+          message: error.message,
+        });
+      }
+      next(error);
+    }
   },
 };
 
