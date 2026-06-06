@@ -2,12 +2,12 @@ import ICP from "./icp.model.js";
 
 const icpRepository = {
 
-  // Naya ICP profile banao
+  // Create a new ICP profile
   create: async (data) => {
     return await ICP.create(data);
   },
 
-  // Saare ICP profiles fetch karo
+  // Fetch all ICP profiles
   findAll: async ({ page = 1, limit = 10, isActive }) => {
     const filter = {};
     if (isActive !== undefined) filter.isActive = isActive === "true";
@@ -31,7 +31,7 @@ const icpRepository = {
     return await ICP.findById(id).populate("createdBy", "name email");
   },
 
-  // ICP profile update karo
+  // Update an ICP profile
   update: async (id, data) => {
     return await ICP.findByIdAndUpdate(id, data, {
       new: true,
@@ -39,7 +39,7 @@ const icpRepository = {
     });
   },
 
-  // ICP profile delete karo
+  // Delete an ICP profile
   delete: async (id) => {
     return await ICP.findByIdAndDelete(id);
   },

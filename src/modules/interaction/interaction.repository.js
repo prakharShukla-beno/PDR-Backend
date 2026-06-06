@@ -2,12 +2,12 @@ import Interaction from "./interaction.model.js";
 
 const interactionRepository = {
 
-  // Naya interaction record save karo
+  // Create a new interaction record
   create: async (data) => {
     return await Interaction.create(data);
   },
 
-  // Ek prospect ki saari interactions fetch karo
+  // Fetch all interactions for a prospect
   findByProspectId: async ({ prospectId, page = 1, limit = 10 }) => {
     const skip = (page - 1) * limit;
 
@@ -30,7 +30,7 @@ const interactionRepository = {
       .populate("prospectId", "accountName website");
   },
 
-  // Interaction update karo
+  // Update an interaction
   update: async (id, data) => {
     return await Interaction.findByIdAndUpdate(id, data, {
       new: true,
@@ -38,7 +38,7 @@ const interactionRepository = {
     });
   },
 
-  // Interaction delete karo
+  // Delete an interaction
   delete: async (id) => {
     return await Interaction.findByIdAndDelete(id);
   },

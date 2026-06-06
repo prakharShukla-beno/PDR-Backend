@@ -3,10 +3,10 @@ import prospectRepository from "../prospect/prospect.repository.js";
 
 const interactionService = {
 
-  // Naya interaction log karo
+  // Log a new interaction
   create: async ({ prospectId, type, notes, outcome, conductedBy, interactedAt }) => {
 
-    // Prospect exist karta hai ya nahi check karo
+    // Check if the prospect exists
     const prospect = await prospectRepository.findById(prospectId);
     if (!prospect) {
       const error = new Error("Prospect not found");
@@ -23,7 +23,7 @@ const interactionService = {
       interactedAt: new Date(interactedAt),
     });
 
-    // Prospect ke interactionIds mein add karo
+    // Add the interaction ID to the prospect's interactionIds
     await prospectRepository.update(prospectId, {
       $push: { interactionIds: interaction._id },
     });
@@ -31,10 +31,10 @@ const interactionService = {
     return interaction;
   },
 
-  // Ek prospect ki saari interactions fetch karo
+  // Fetch all interactions for a prospect
   getByProspectId: async ({ prospectId, page, limit }) => {
 
-    // Prospect exist karta hai ya nahi
+    // Verify the prospect exists
     const prospect = await prospectRepository.findById(prospectId);
     if (!prospect) {
       const error = new Error("Prospect not found");
@@ -72,7 +72,7 @@ const interactionService = {
     return interaction;
   },
 
-  // Interaction update karo
+  // Update an interaction
   update: async (id, data) => {
     const interaction = await interactionRepository.findById(id);
 
@@ -82,13 +82,13 @@ const interactionService = {
       throw error;
     }
 
-    // interactedAt update ho raha hai toh Date object banao
+    // If `interactedAt` is provided, convert it to a Date object
     if (data.interactedAt) data.interactedAt = new Date(data.interactedAt);
 
     return await interactionRepository.update(id, data);
   },
 
-  // Interaction delete karo
+  // Delete an interaction
   delete: async (id, prospectId) => {
     const interaction = await interactionRepository.findById(id);
 
@@ -100,7 +100,7 @@ const interactionService = {
 
     await interactionRepository.delete(id);
 
-    // Prospect ke interactionIds se bhi remove karo
+    // Also remove the interaction ID from the prospect's interactionIds
     await prospectRepository.update(interaction.prospectId, {
       $pull: { interactionIds: interaction._id },
     });

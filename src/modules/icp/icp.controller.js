@@ -52,7 +52,7 @@ const icpController = {
     }
   },
 
-  // PUT /api/icp/:id — profile update karo
+  // PUT /api/icp/:id — update the profile
   update: async (req, res, next) => {
     try {
       const profile = await icpService.update(req.params.id, req.body);
@@ -66,7 +66,7 @@ const icpController = {
     }
   },
 
-  // DELETE /api/icp/:id — profile delete karo
+  // DELETE /api/icp/:id — delete the profile
   delete: async (req, res, next) => {
     try {
       const result = await icpService.delete(req.params.id);
@@ -76,7 +76,7 @@ const icpController = {
     }
   },
 
-  // GET /api/icp/:id/match-prospects — ICP se matching prospects
+  // GET /api/icp/:id/match-prospects — match prospects using ICP criteria
   matchProspects: async (req, res, next) => {
     try {
       const { page, limit } = req.query;
@@ -93,7 +93,7 @@ const icpController = {
     }
   },
 
-  // GET /api/icp/:id/match-persona — buyer persona se best POC
+  // GET /api/icp/:id/match-persona — find best POC using buyer persona
   matchBuyerPersona: async (req, res, next) => {
     try {
       const { page, limit } = req.query;

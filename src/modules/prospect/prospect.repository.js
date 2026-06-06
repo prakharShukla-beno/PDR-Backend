@@ -7,6 +7,32 @@ const prospectRepository = {
     return await Prospect.create(data);
   },
 
+  // Bulk insert — for chunked inserts (e.g., 1000 rows per chunk)
+  insertMany: async (rows, options = {}) => {
+    try {
+      // Set accountNameLower manually — do not rely on model hooks
+      const prepared = rows.map(r => ({
+        ...r,
+        accountNameLower: r.accountName
+          ? r.accountName.toLowerCase().trim()
+          : null,
+      }));
+
+      const result = await Prospect.insertMany(prepared, {
+        ordered:   false,  // continue inserting remaining docs if one fails
+        rawResult: true,   // raw result contains insertedCount
+        ...options,
+      });
+      return result;
+    } catch (err) {
+      // BulkWriteError — partial insert may have occurred
+      if (err.name === "BulkWriteError" || err.result) {
+        return err.result;
+      }
+      throw err;
+    }
+  },
+
   // Get all prospects with pagination and filters
   findAll: async ({ filter = {}, page = 1, limit = 10, sort = { createdAt: -1 } }) => {
     const skip = (page - 1) * limit;
