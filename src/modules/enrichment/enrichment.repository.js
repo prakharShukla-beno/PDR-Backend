@@ -15,7 +15,7 @@ const enrichmentRepository = {
     );
   },
 
-  // Upsert — agar pehle se hai toh update, nahi toh create
+  // Upsert — update if exists, otherwise create
   upsertByProspectId: async (prospectId, data) => {
     return await Enrichment.findOneAndUpdate(
       { prospectId },

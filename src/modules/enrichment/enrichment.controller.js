@@ -3,12 +3,13 @@ import enrichmentService from "./enrichment.service.js";
 
 const enrichmentController = {
 
-  // POST /api/enrichment/:prospectId — single prospect enrich karo
+  // POST /api/enrichment/:prospectId
   enrichOne: async (req, res, next) => {
     try {
       const { prospectId } = req.params;
 
-      const enrichment = await enrichmentService.enrichOne(prospectId, req.user._id);
+      // FIX: enrichOne → enrichSingle
+      const enrichment = await enrichmentService.enrichSingle(prospectId, req.user._id);
 
       res.status(200).json({
         success: true,
@@ -20,7 +21,7 @@ const enrichmentController = {
     }
   },
 
-  // POST /api/enrichment/bulk — multiple prospects ek saath enrich karo
+  // POST /api/enrichment/bulk
   enrichBulk: async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -32,12 +33,11 @@ const enrichmentController = {
       }
 
       const { prospectIds } = req.body;
-
       const result = await enrichmentService.enrichBulk(prospectIds, req.user._id);
 
       res.status(200).json({
         success: true,
-        message: `Bulk enrichment complete — ${result.successCount} of ${result.total} enriched`,
+        message: `Bulk enrichment complete — ${result.success} enriched, ${result.failed} failed`,
         data: result,
       });
     } catch (error) {
@@ -45,12 +45,13 @@ const enrichmentController = {
     }
   },
 
-  // GET /api/enrichment/:prospectId — prospect ka saved enrichment fetch karo
+  // GET /api/enrichment/:prospectId
   getOne: async (req, res, next) => {
     try {
       const { prospectId } = req.params;
 
-      const enrichment = await enrichmentService.getByProspectId(prospectId);
+      // FIX: getByProspectId → getHistory
+      const enrichment = await enrichmentService.getHistory(prospectId);
 
       res.status(200).json({
         success: true,

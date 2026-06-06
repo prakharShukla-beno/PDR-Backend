@@ -37,7 +37,7 @@ const notificationSchema = new mongoose.Schema(
   }
 );
 
-// Fast lookup — user ki saari notifications
+// Fast lookup — all notifications for the user
 notificationSchema.index({ userId: 1, isRead: 1 });
 
 const Notification = mongoose.model("Notification", notificationSchema);

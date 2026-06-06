@@ -1,32 +1,18 @@
 import mongoose from "mongoose";
 
-// ─── Embedded Contact Sub-Schema ───────────────────────────────────────────────
-const contactSchema = new mongoose.Schema(
-  {
-    name:        { type: String, trim: true, default: null },
-    designation: { type: String, trim: true, default: null },
-    department:  { type: String, trim: true, default: null },
-    seniority: {
-      type: String,
-      enum: ["C-Suite", "VP", "Director", "Manager", "Individual Contributor", null],
-      default: null,
-    },
-    email:     { type: String, trim: true, lowercase: true, default: null },
-    phone:     { type: String, trim: true, default: null },
-    linkedIn:  { type: String, trim: true, default: null },
-    isPrimary: { type: Boolean, default: false },
-  },
-  { _id: true }
-);
-
-// ─── Main Prospect Schema ──────────────────────────────────────────────────────
 const prospectSchema = new mongoose.Schema(
   {
-    // ── Account Information ────────────────────────────────────────────────────
+    // ── Account Information ──────────────────────────────────────────────────
     accountName: {
       type: String,
       required: [true, "Account name is required"],
       trim: true,
+    },
+    // Lowercase copy — for exact matching (avoid regex)
+    accountNameLower: {
+      type: String,
+      trim: true,
+      default: null,
     },
     accountSource: {
       type: String,
@@ -35,7 +21,11 @@ const prospectSchema = new mongoose.Schema(
     },
     primaryIndustry: {
       type: String,
-      enum: ["BFSI", "IT & ITES", "Media & Telecom", "Retail & CPG", "Healthcare", null],
+      enum: [
+        "BFSI", "IT & ITES", "SaaS", "Fintech", "E-commerce",
+        "Healthcare", "EdTech", "Logistics", "Manufacturing",
+        "Retail & CPG", "Media & Telecom", "Real Estate", null,
+      ],
       default: null,
     },
     commercialCategory: {
@@ -45,7 +35,7 @@ const prospectSchema = new mongoose.Schema(
     },
     businessModel: {
       type: String,
-      enum: ["B2B", "B2C", "D2C", "E-Commerce", null],
+      enum: ["B2B", "B2C", "D2C", "E-Commerce", "B2B2C", "Marketplace", null],
       default: null,
     },
     country: {
@@ -61,12 +51,8 @@ const prospectSchema = new mongoose.Schema(
     annualRevenue: {
       type: String,
       enum: [
-        "Seed <$1M",
-        "Early $1M-$10M",
-        "Scale-Up $10M-$50M",
-        "Mid-Market $50M-$250M",
-        "Corporate $250M-$1B",
-        null,
+        "Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M",
+        "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+", null,
       ],
       default: null,
     },
@@ -75,11 +61,12 @@ const prospectSchema = new mongoose.Schema(
       enum: ["1-50", "51-200", "201-1,000", "1,001-5,000", "5,000+", null],
       default: null,
     },
-    primaryTechStack: {
-      type: String,
-      enum: ["Cloud Native", "Legacy On-Prem", "Hybrid Cloud", "GenAI & LLM", "Low-Code/No-Code", null],
-      default: null,
-    },
+
+    // ── Tech Stack ───────────────────────────────────────────────────────────
+    // Multi-select arrays — e.g. ["AWS", "React", "MongoDB"]
+    primaryTechStack:   { type: [String], default: [] },
+    secondaryTechStack: { type: [String], default: [] },
+    tertiaryTechStack:  { type: [String], default: [] },
     techAdoptionProfile: {
       type: String,
       enum: ["Innovator", "Early Adopter", "Mainstream", "Laggard", "Leapfrog", null],
@@ -97,7 +84,11 @@ const prospectSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ── Sales Intelligence ─────────────────────────────────────────────────────
+    // ── Client Specific ──────────────────────────────────────────────────────
+    campaignName: { type: String, trim: true, default: null },
+    comments:     { type: String, trim: true, default: null },
+
+    // ── Sales Intelligence ───────────────────────────────────────────────────
     techFitScore: {
       type: Number,
       min: 0,
@@ -130,7 +121,12 @@ const prospectSchema = new mongoose.Schema(
     },
     intentSignal: {
       type: String,
-      enum: ["Hyper-Growth Mode", "Cost Containment", "Risk Mitigation", "Modernization Mandate", null],
+      enum: [
+        "Hyper-Growth Mode", "Cost Containment", "Risk Mitigation",
+        "Modernization Mandate", "Capital Event", "Regulatory Action",
+        "Earnings Shock", "Strategic Pivot", "Security Incident",
+        "Job Postings", null,
+      ],
       default: null,
     },
     servicePitch: {
@@ -155,56 +151,75 @@ const prospectSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ── Contacts (POC) — Embedded Array ───────────────────────────────────────
-    contacts: [contactSchema],
-
-    // ── Relational References ──────────────────────────────────────────────────
+    // ── Relational References ────────────────────────────────────────────────
+    // contacts[] array removed — contacts are stored in the separate Contact collection
+    // Account detail page: GET /api/contacts?accountId=xxx
     importLogId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ImportLog",
-      required: [true, "Import log reference is required"],
+      default: null,
+      // Optional — only set for Excel/import records, null for manual entries
     },
     assignedTo: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
     },
-    campaignIds: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Campaign",
-      },
-    ],
-    interactionIds: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Interaction",
-      },
-    ],
+    campaignIds:    [{ type: mongoose.Schema.Types.ObjectId, ref: "Campaign" }],
+    interactionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Interaction" }],
 
-    // ── System & Control ───────────────────────────────────────────────────────
+    // ── System ───────────────────────────────────────────────────────────────
     isDuplicate: { type: Boolean, default: false },
     source: {
       type: String,
-      required: [true, "Source is required"],
-      enum: ["excel", "apollo", "zoominfo"],
-      default: "excel",
+      enum: ["excel", "apollo", "zoominfo", "manual", "linkedin", "referral", "website", "event", "other", null],
+      default: "manual",
     },
   },
-  {
-    timestamps: true, // createdAt, updatedAt auto
-  }
+  { timestamps: true }
 );
 
-// ─── Indexes — FRD: search & filter within 2 seconds ──────────────────────────
+// ─── Pre-save: accountNameLower auto-set ──────────────────────────────────────
+prospectSchema.pre("save", function () {
+  if (this.accountName) {
+    this.accountNameLower = this.accountName.toLowerCase().trim();
+  }
+});
+
+prospectSchema.pre("insertMany", function (next, docs) {
+  if (!docs || !Array.isArray(docs)) {
+    if (typeof next === "function") next();
+    return;
+  }
+  docs.forEach((doc) => {
+    if (doc.accountName) {
+      doc.accountNameLower = doc.accountName.toLowerCase().trim();
+    }
+  });
+  if (typeof next === "function") next();
+});
+
+
+// ─── Indexes ──────────────────────────────────────────────────────────────────
 prospectSchema.index({ accountName: "text", website: "text" });
 prospectSchema.index({ accountName: 1 });
+prospectSchema.index({ accountNameLower: 1 });   // exact match ke liye
 prospectSchema.index({ website: 1 });
 prospectSchema.index({ isDuplicate: 1 });
 prospectSchema.index({ primaryIndustry: 1 });
 prospectSchema.index({ country: 1 });
+prospectSchema.index({ hqLocationCity: 1 });
 prospectSchema.index({ salesPriority: 1 });
+prospectSchema.index({ clvRanking: 1 });
+prospectSchema.index({ intentSignal: 1 });
+prospectSchema.index({ businessModel: 1 });
+prospectSchema.index({ noOfEmployees: 1 });
+prospectSchema.index({ annualRevenue: 1 });
+prospectSchema.index({ techFitScore: 1 });
+prospectSchema.index({ finalScore: 1 });
+prospectSchema.index({ technologyAlignment: 1 });
 prospectSchema.index({ assignedTo: 1 });
+prospectSchema.index({ source: 1 });
 
 const Prospect = mongoose.model("Prospect", prospectSchema);
 export default Prospect;
