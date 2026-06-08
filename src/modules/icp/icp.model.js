@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { INDUSTRIES } from "../../common/constants/taxonomy.js";
 
 const icpSchema = new mongoose.Schema(
   {
@@ -20,23 +21,7 @@ const icpSchema = new mongoose.Schema(
     // ── Company filters ──────────────────────────────────────────────────────
     industries: {
       type: [String],
-      enum: [
-        "BFSI",
-        "IT & ITES",
-        "Media & Telecom",
-        "Healthcare & Life Sciences",
-        "Manufacturing & Automotive",
-        "Travel, Transport & Logistics",
-        "Real Estate & Construction",
-        "Public Sector, Gov & Education",
-        "Professional Services",
-        "Energy, Resources & Utilities",
-        "Retail & CPG",
-        "SaaS",
-        "Fintech",
-        "E-commerce",
-        "EdTech",
-      ],
+      enum: INDUSTRIES,
       default: [],
     },
     businessModels: {

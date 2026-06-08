@@ -2,6 +2,7 @@ import { Router } from "express";
 import { body } from "express-validator";
 import icpController from "./icp.controller.js";
 import authMiddleware from "../../common/middlewares/auth.middleware.js";
+import { INDUSTRIES } from "../../common/constants/taxonomy.js";
 
 const router = Router();
 
@@ -16,14 +17,8 @@ const icpValidation = [
   body("industries")
     .optional()
     .isArray().withMessage("industries must be an array")
-    .custom((arr) => {
-      const valid = [
-        "BFSI", "IT & ITES", "SaaS", "Fintech", "E-commerce",
-        "Healthcare", "EdTech", "Logistics", "Manufacturing",
-        "Retail & CPG", "Media & Telecom", "Real Estate",
-      ];
-      return arr.every((v) => valid.includes(v));
-    }).withMessage("Invalid industry value"),
+    .custom((arr) => arr.every((v) => INDUSTRIES.includes(v)))
+    .withMessage("Invalid industry value"),
 
   body("businessModels")
     .optional()
