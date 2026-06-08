@@ -259,15 +259,34 @@ const duplicateService = {
     return updated;
   },
 
+  // ── Delete — hard delete the duplicate record itself (not the prospects) ──
+  deleteDuplicate: async (id, userId) => {
+    const duplicate = await duplicateRepository.findById(id);
+    if (!duplicate) throw Object.assign(new Error("Duplicate record not found"), { statusCode: 404 });
+
+    await duplicateRepository.delete(id);
+
+    await auditLogService.log({
+      userId,
+      action:      "DELETE",
+      entity:      "Duplicate",
+      entityId:    id,
+      description: `Duplicate record hard deleted`,
+    });
+
+    return { deleted: true, id };
+  },
+
   // ── Bulk action — apply same action to multiple IDs ───────────────────────
   bulkAction: async (ids, action, userId) => {
     const results = { success: 0, failed: 0, errors: [] };
 
     for (const id of ids) {
       try {
-        if (action === "merge")     await duplicateService.merge(id, userId);
-        else if (action === "skip") await duplicateService.skip(id, userId);
-        else if (action === "keep-both") await duplicateService.keepBoth(id, userId);
+        if (action === "merge")           await duplicateService.merge(id, userId);
+        else if (action === "skip")       await duplicateService.skip(id, userId);
+        else if (action === "keep-both")  await duplicateService.keepBoth(id, userId);
+        else if (action === "delete")     await duplicateService.deleteDuplicate(id, userId);
         results.success++;
       } catch (err) {
         results.failed++;

@@ -37,6 +37,16 @@ const duplicateRepository = {
       { new: true, runValidators: true }
     );
   },
+
+  // Hard delete duplicate record from DB
+  delete: async (id) => {
+    return await Duplicate.findByIdAndDelete(id);
+  },
+
+  // Bulk hard delete
+  deleteMany: async (ids) => {
+    return await Duplicate.deleteMany({ _id: { $in: ids } });
+  },
 };
 
 export default duplicateRepository;

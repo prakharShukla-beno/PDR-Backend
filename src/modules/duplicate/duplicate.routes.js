@@ -7,7 +7,8 @@ router.use(authMiddleware);
 
 router.get("/",                duplicateController.getAll);
 router.get("/:id",             duplicateController.getById);
-router.post("/bulk",           duplicateController.bulkAction);    // NEW: bulk action
+router.post("/bulk",           duplicateController.bulkAction);    // bulk action (merge/skip/keep-both/delete)
+router.delete("/:id",          duplicateController.deleteDuplicate); // NEW: hard delete
 router.put("/:id/merge",       duplicateController.merge);
 router.put("/:id/skip",        duplicateController.skip);
 router.put("/:id/keep-both",   duplicateController.keepBoth);
