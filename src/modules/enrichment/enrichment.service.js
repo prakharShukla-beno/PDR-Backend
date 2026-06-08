@@ -136,7 +136,7 @@ const enrichSingleProspect = async (prospectId, userId) => {
   });
 
   // ── Save enrichment record ────────────────────────────────────────────────
-  const enrichment = await enrichmentRepository.create({
+  const enrichment = await enrichmentRepository.upsertByProspectId(prospectId, {
     prospectId,
     enrichedBy:       "ai_module",
     enrichedAt:        new Date(),
