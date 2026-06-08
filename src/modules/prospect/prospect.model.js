@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { INDUSTRIES } from "../../common/constants/taxonomy.js";
 
 const prospectSchema = new mongoose.Schema(
   {
@@ -21,11 +22,7 @@ const prospectSchema = new mongoose.Schema(
     },
     primaryIndustry: {
       type: String,
-      enum: [
-        "BFSI", "IT & ITES", "SaaS", "Fintech", "E-commerce",
-        "Healthcare", "EdTech", "Logistics", "Manufacturing",
-        "Retail & CPG", "Media & Telecom", "Real Estate", null,
-      ],
+      enum: [...INDUSTRIES, null],
       default: null,
     },
     commercialCategory: {
