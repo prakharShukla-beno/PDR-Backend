@@ -95,6 +95,12 @@ const prospectSchema = new mongoose.Schema(
       max: 100,
       default: null,
     },
+    finalScore: { type: Number, min: 0, max: 120, default: null },
+    technologyAlignment: {
+      type: String,
+      enum: ["Core Match", "Adjacent Match", "No Match", null],
+      default: null,
+    },
     financialCapacity: {
       type: String,
       enum: ["Enterprise", "Mid-Market", "Small Business", null],
