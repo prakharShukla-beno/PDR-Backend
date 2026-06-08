@@ -2,6 +2,7 @@ import segmentRepository    from "./segment.repository.js";
 import Prospect             from "../prospect/prospect.model.js";
 import ICP                  from "../icp/icp.model.js";
 import enrichmentService    from "../enrichment/enrichment.service.js";
+import { calculateScore }   from "../../common/utils/scoring.js";
 
 // ─── Region → Countries map (ICP region logic ke liye) ───────────────────────
 // APAC include karo + Pakistan exclude karo — yahi flow yahan handle hota hai
@@ -405,40 +406,18 @@ const segmentService = {
               }
             }
 
-            // ── Step 4: Full formula: ((Financial + Strategic) × Sector) × TechFit
-            const financialPoints =
-              fresh.financialCapacity === "Enterprise"    ? 50 :
-              fresh.financialCapacity === "Mid-Market"    ? 25 : 10;
-            const strategicBonus =
-              fresh.strategicValue === "Market Maker" ? 40 :
-              fresh.strategicValue === "VC Backed"    ? 20 : 0;
-            const HIGH = ["bfsi","saas","healthcare","fintech","pharma","legal"];
-            const LOW  = ["retail","logistics","e-commerce","construction","hospitality","govt"];
-            const ind  = (fresh.primaryIndustry || "").toLowerCase();
-            const sectorMult = HIGH.some(h => ind.includes(h)) ? 1.2
-              : LOW.some(l => ind.includes(l)) ? 0.8 : 1.0;
-
-            const finalScore = Math.round(
-              ((financialPoints + strategicBonus) * sectorMult) * techFitMultiplier
-            );
-
-            const clvRanking =
-              finalScore > 60  ? "Tier-A (Strategic)" :
-              finalScore >= 30 ? "Tier-B (Core)" : "Tier-C (Mass)";
-
-            const isActive = !!fresh.intentSignal;
-            const salesPriority =
-              clvRanking.includes("A") && isActive  ? "P1 (Tier A+Active)" :
-              clvRanking.includes("B") && isActive  ? "P2 (Tier B+Active)" :
-              clvRanking.includes("A") && !isActive ? "P3 (Tier A+Cold)" :
-              clvRanking.includes("B") && !isActive ? "P4 (Tier B+Cold)" :
-              isActive ? "P5 (Tier C+Active)" : null;
+            // ── Step 4: Score via central engine (scoring.js) ─────────────────
+            const icpForScoring = {
+              techStackInclude: allIncludedTools,
+              techStackExclude: allExcludedTools,
+            };
+            const result = calculateScore(fresh, icpForScoring);
 
             await Prospect.findByIdAndUpdate(account._id, {
-              techFitScore:  Math.round(techFitMultiplier * 100),
-              finalScore,
-              clvRanking,
-              salesPriority,
+              techFitScore:  result.techFitScore,
+              finalScore:    result.finalScore,
+              clvRanking:    result.clvRanking,
+              salesPriority: result.salesPriority,
             });
 
             scoredCount++;
