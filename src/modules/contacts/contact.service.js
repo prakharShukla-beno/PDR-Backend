@@ -1,4 +1,5 @@
 import contactRepository from "./contact.repository.js";
+import Contact          from "./contact.model.js";
 import Prospect          from "../prospect/prospect.model.js";
 import campaignRepository from "../campaign/campaign.repository.js";
 
@@ -105,7 +106,68 @@ const contactService = {
   },
 
   getByAccountId: async (accountId) => {
-    return await contactRepository.findByAccountId(accountId);
+    const prospect = await Prospect.findById(accountId).lean();
+    const prospectName = prospect?.accountName?.trim() || "";
+
+    // Step 1: Get contacts directly linked by accountId
+    // Step 2: Also find unlinked contacts whose accountName matches (case-insensitive contains)
+    // Two separate queries — simple, reliable, no $expr tricks
+    const byId = await Contact.find({ accountId })
+      .populate("campaignIds", "name status")
+      .sort({ isPrimary: -1, createdAt: -1 })
+      .lean();
+
+    let byName = [];
+    if (prospectName) {
+      // Get all contacts where accountName contains prospectName OR prospectName contains accountName
+      const allUnlinked = await Contact.find({
+        accountId: null,
+        accountName: { $nin: [null, ""] },
+      }).select("_id accountName").lean();
+
+      const nameMatched = allUnlinked.filter(c => {
+        const cName = (c.accountName || "").toLowerCase().trim();
+        const pName = prospectName.toLowerCase();
+        return cName.includes(pName) || pName.includes(cName);
+      });
+
+      if (nameMatched.length > 0) {
+        byName = await Contact.find({ _id: { $in: nameMatched.map(c => c._id) } })
+          .populate("campaignIds", "name status")
+          .sort({ isPrimary: -1, createdAt: -1 })
+          .lean();
+      }
+    }
+
+    // Merge — deduplicate by _id
+    const seen = new Set(byId.map(c => c._id.toString()));
+    const contacts = [...byId, ...byName.filter(c => !seen.has(c._id.toString()))];
+
+    // Auto-link unlinked contacts found by name — background, non-blocking
+    if (byName.length > 0 && prospect) {
+      const accountFields = {
+        accountId:            prospect._id,
+        isLinked:             true,
+        accountName:          prospect.accountName,
+        accountIndustry:      prospect.primaryIndustry || null,
+        accountCountry:       prospect.country         || null,
+        accountCity:          prospect.hqLocationCity  || null,
+        accountEmployees:     prospect.noOfEmployees   || null,
+        accountRevenue:       prospect.annualRevenue   || null,
+        accountBusinessModel: prospect.businessModel   || null,
+        accountSalesPriority: prospect.salesPriority   || null,
+        accountClvRanking:    prospect.clvRanking      || null,
+        accountTechFitScore:  prospect.techFitScore    || null,
+        accountIntentSignal:  prospect.intentSignal    || null,
+        accountWebsite:       prospect.website         || null,
+      };
+      Contact.updateMany(
+        { _id: { $in: byName.map(c => c._id) } },
+        { $set: accountFields }
+      ).catch(() => {});
+    }
+
+    return contacts;
   },
 
   update: async (id, data) => {
@@ -153,6 +215,66 @@ const contactService = {
       throw error;
     }
     return await contactRepository.removeCampaign(contactId, campaignId);
+  },
+
+  // Link a single contact to an account by prospectId
+  // Updates accountId, isLinked, and denormalized account fields
+  linkToAccount: async (contactId, prospectId) => {
+    const contact = await contactRepository.findById(contactId);
+    if (!contact) {
+      const error = new Error("Contact not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const prospect = await Prospect.findById(prospectId).lean();
+    if (!prospect) {
+      const error = new Error("Account not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const accountFields = extractAccountFields(prospect);
+
+    return await contactRepository.update(contactId, {
+      accountId:   prospect._id,
+      accountName: prospect.accountName,
+      isLinked:    true,
+      ...accountFields,
+    });
+  },
+
+  // Bulk link unlinked contacts to accounts by accountName match
+  // Called from migration route or admin trigger
+  bulkLinkByName: async () => {
+    const unlinked = await contactRepository.findAll({
+      filter: { isLinked: false, accountName: { $ne: null } },
+      page: 1, limit: 99999, sort: { createdAt: -1 },
+    });
+
+    let linked = 0, skipped = 0;
+
+    for (const contact of unlinked.contacts) {
+      if (!contact.accountName) { skipped++; continue; }
+
+      const prospect = await Prospect.findOne({
+        accountName: { $regex: new RegExp("^" + contact.accountName.trim() + "$", "i") },
+      }).lean();
+
+      if (prospect) {
+        const accountFields = extractAccountFields(prospect);
+        await contactRepository.update(contact._id, {
+          accountId:   prospect._id,
+          isLinked:    true,
+          ...accountFields,
+        });
+        linked++;
+      } else {
+        skipped++;
+      }
+    }
+
+    return { linked, skipped, total: unlinked.contacts.length };
   },
 };
 

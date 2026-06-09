@@ -2,6 +2,7 @@ import prospectRepository from "./prospect.repository.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
 import pkg from "xlsx";
+import Contact from "../contacts/contact.model.js";
 const { utils, write } = pkg;
 
 const prospectService = {
@@ -232,6 +233,118 @@ const prospectService = {
     }
 
     return results;
+  },
+
+  // ── Suggest POC via Gemini AI ─────────────────────────────────────────────
+  // Scenario 1: contacts exist → pick best match based on ICP buyer persona
+  // Scenario 2: no contacts   → suggest target role + LinkedIn search tip
+  suggestPoc: async (prospectId) => {
+    // Get prospect data
+    const prospect = await prospectRepository.findById(prospectId);
+    if (!prospect) {
+      const err = new Error("Prospect not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    // Fetch all contacts linked to this account
+    const contacts = await Contact.find({ accountId: prospectId })
+      .select("firstName lastName email standardizedRoles functionalDomain isPrimary")
+      .lean();
+
+    // Build Gemini prompt — different for each scenario
+    const contactList = contacts.length > 0
+      ? contacts.map((c, i) =>
+          `${i + 1}. ${c.firstName || ""} ${c.lastName || ""} | Role: ${c.standardizedRoles || "Unknown"} | Dept: ${c.functionalDomain || "Unknown"} | Email: ${c.email || "N/A"}`
+        ).join("\n")
+      : "No contacts available";
+
+    const prompt = `
+You are a B2B sales intelligence assistant.
+
+Company Info:
+- Name: ${prospect.accountName}
+- Industry: ${prospect.primaryIndustry || "N/A"}
+- Business Model: ${prospect.businessModel || "N/A"}
+- Employees: ${prospect.noOfEmployees || "N/A"}
+- Revenue: ${prospect.annualRevenue || "N/A"}
+- Intent Signal: ${prospect.intentSignal || "N/A"}
+- CLV Ranking: ${prospect.clvRanking || "N/A"}
+
+Existing Contacts:
+${contactList}
+
+Task:
+${contacts.length > 0
+  ? "From the contacts above, identify who is the BEST point of contact (decision maker) for a B2B sales outreach. Pick one."
+  : "No contacts exist. Suggest the best TARGET ROLE to find on LinkedIn for B2B sales outreach."
+}
+
+Return ONLY valid JSON (no markdown, no explanation):
+${contacts.length > 0
+  ? `{
+  "scenario": "contacts_exist",
+  "recommendedIndex": <0-based index from contacts list>,
+  "recommendedRole": "<their role>",
+  "reason": "<1 line why this person>",
+  "confidenceLevel": "High | Medium | Low"
+}`
+  : `{
+  "scenario": "no_contacts",
+  "recommendedContactId": null,
+  "targetRole": "<best role to search>",
+  "targetDepartment": "<department>",
+  "searchSuggestion": "<one line — what to search on LinkedIn>",
+  "reason": "<1 line why this role>",
+  "confidenceLevel": "High | Medium | Low"
+}`
+}`;
+
+    // Call Gemini API
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const response  = await fetch(geminiUrl, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+
+    if (!response.ok) {
+      const err = new Error("Gemini API error");
+      err.statusCode = 502;
+      throw err;
+    }
+
+    const data    = await response.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const cleaned = content.replace(/```json|```/g, "").trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      throw new Error("Could not parse Gemini response");
+    }
+
+    // Scenario 1 — attach the actual contact object to result
+    if (parsed.scenario === "contacts_exist" && parsed.recommendedIndex != null) {
+      const recommended = contacts[parsed.recommendedIndex] || null;
+      return {
+        scenario:          "contacts_exist",
+        recommendedContact: recommended,
+        reason:            parsed.reason,
+        confidenceLevel:   parsed.confidenceLevel,
+      };
+    }
+
+    // Scenario 2 — no contacts, return role suggestion
+    return {
+      scenario:         "no_contacts",
+      targetRole:       parsed.targetRole,
+      targetDepartment: parsed.targetDepartment,
+      searchSuggestion: parsed.searchSuggestion,
+      reason:           parsed.reason,
+      confidenceLevel:  parsed.confidenceLevel,
+    };
   },
 
   // Export all matching prospects to Excel file — FR-2.2
