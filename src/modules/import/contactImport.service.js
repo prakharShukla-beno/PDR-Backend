@@ -1,12 +1,24 @@
 import fs from "fs";
 import { processContactFile } from "../../common/utils/contactFileParser.js";
-import contactRepository from "../contacts/contact.repository.js";
 import Contact from "../contacts/contact.model.js";
 import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
 import auditLogService from "../auditLog/auditLog.service.js";
 import Prospect from "../prospect/prospect.model.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
+import {
+  isEmpty,
+  hasValue,
+  buildContactDedupIndexes,
+  findDbContactDuplicate,
+  createInFileDedupTracker,
+  checkInFileDuplicate,
+  registerInFileRow,
+  fetchExistingContactsForDedup,
+  normEmail,
+  normPhone,
+  nameAccountKey,
+} from "../../common/utils/contactDedup.js";
 
 const CHUNK_SIZE = 1000;
 
@@ -48,7 +60,7 @@ const contactImportService = {
   // ==========================================================================
   // CONTACT IMPORT — Step 1
   // Save non-duplicates and return duplicates to the user for review
-  // Duplicate = same email already exists in DB
+  // Duplicate = email OR phone OR (firstName + lastName + accountName) match
   // ==========================================================================
   processContactImport: async (filePath, userId) => {
 
@@ -73,19 +85,6 @@ const contactImportService = {
       return { importLogId: importLog._id, totalRows, successCount: 0, failedCount: errorDetails.length, duplicates: [], errorDetails, status: "failed" };
     }
 
-    // Find existing contacts by email (duplicate check)
-    const emails = validRows.map(r => r.email?.toLowerCase().trim()).filter(Boolean);
-    const existingContacts = emails.length > 0
-      ? await Contact.find({ email: { $in: emails } })
-          .select("_id email firstName lastName standardizedRoles functionalDomain accountName accountIndustry primaryPhone linkedIn")
-          .lean()
-      : [];
-
-    const existingEmailMap = {};
-    for (const c of existingContacts) {
-      if (c.email) existingEmailMap[c.email.toLowerCase()] = c;
-    }
-
     // Get account map for linking
     const uniqueAccountNames = [...new Set(validRows.map(r => r.accountName?.trim()).filter(Boolean))];
     const accountMap = {};
@@ -100,19 +99,13 @@ const contactImportService = {
       }
     }
 
-    // Separate new contacts from duplicates
-    const newRows       = [];
-    const duplicateRows = [];
-
-    for (const row of validRows) {
-      const emailKey  = row.email?.toLowerCase().trim();
-      const isDuplicate = emailKey && existingEmailMap[emailKey];
-
-      const nameKey   = row.accountName?.trim().toLowerCase();
-      const prospect  = nameKey ? accountMap[nameKey] : null;
+    // Prepare all rows first so we can batch-fetch existing contacts for dedup
+    const preparedRows = validRows.map((row) => {
+      const nameKey       = row.accountName?.trim().toLowerCase();
+      const prospect      = nameKey ? accountMap[nameKey] : null;
       const accountFields = prospect ? extractAccountFields(prospect) : {};
 
-      const preparedRow = {
+      return {
         ...row,
         accountId:   prospect ? prospect._id : null,
         accountName: row.accountName?.trim() || null,
@@ -121,33 +114,58 @@ const contactImportService = {
         source:      filePath.toLowerCase().endsWith(".csv") ? "csv" : "excel",
         importLogId: importLog._id,
       };
+    });
 
-      if (isDuplicate) {
-        // Save to duplicate collection for review on Duplicates page
+    const existingContacts = await fetchExistingContactsForDedup(Contact, preparedRows);
+    const dedupIndexes     = buildContactDedupIndexes(existingContacts);
+    const fileTracker      = createInFileDedupTracker();
+
+    const newRows           = [];
+    const duplicateRows     = [];
+    const deferredInFileDups = [];
+    const insertErrors      = [];
+
+    for (const preparedRow of preparedRows) {
+      const dbDup = findDbContactDuplicate(preparedRow, dedupIndexes);
+      if (dbDup) {
         await duplicateRepository.create({
-          prospectId1: existingEmailMap[emailKey]._id,
-          entityType:  "Contact",   // ← Contact duplicate hai
+          prospectId1: dbDup.existing._id,
+          entityType:  "Contact",
           newData:     preparedRow,
-          matchFields: ["email"],
+          matchFields: dbDup.matchFields,
           source:      "import",
           importLogId: importLog._id,
           status:      "pending",
         });
         duplicateRows.push({
           newData:      preparedRow,
-          existingData: existingEmailMap[emailKey],
-          matchFields:  ["email"],
+          existingData: dbDup.existing,
+          matchFields:  dbDup.matchFields,
         });
-      } else {
-        newRows.push(preparedRow);
+        continue;
       }
+
+      const inFileDup = checkInFileDuplicate(preparedRow, fileTracker);
+      if (inFileDup) {
+        deferredInFileDups.push({
+          preparedRow,
+          matchFields:  inFileDup.matchFields,
+          firstRowData: inFileDup.firstRow,
+        });
+        insertErrors.push(
+          `In-file duplicate (${inFileDup.matchFields.join(", ")}): ` +
+          `${preparedRow.email || preparedRow.primaryPhone || `${preparedRow.firstName} ${preparedRow.lastName}`.trim()}`
+        );
+        continue;
+      }
+
+      registerInFileRow(preparedRow, fileTracker);
+      newRows.push(preparedRow);
     }
 
-    console.log(`📦 New: ${newRows.length} | Duplicates: ${duplicateRows.length}`);
+    console.log(`📦 New: ${newRows.length} | DB Duplicates: ${duplicateRows.length} | In-file skipped: ${deferredInFileDups.length}`);
 
-    // Insert new contacts
     let successCount = 0;
-    const insertErrors = [];
 
     for (let i = 0; i < newRows.length; i += CHUNK_SIZE) {
       const chunk    = newRows.slice(i, i + CHUNK_SIZE);
@@ -156,6 +174,50 @@ const contactImportService = {
       successCount  += inserted;
       if (inserted < chunk.length) insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
       await importLogRepository.update(importLog._id, { successCount });
+    }
+
+    // Flag in-file duplicates for review once the first row is saved
+    if (deferredInFileDups.length > 0 && successCount > 0) {
+      const insertedContacts = await Contact.find({ importLogId: importLog._id })
+        .select("_id email primaryPhone firstName lastName accountName")
+        .lean();
+
+      const insertedByEmail = {};
+      const insertedByPhone = {};
+      const insertedByNameAccount = {};
+      for (const c of insertedContacts) {
+        const email = normEmail(c.email);
+        if (email) insertedByEmail[email] = c;
+        const phone = normPhone(c.primaryPhone);
+        if (phone) insertedByPhone[phone] = c;
+        const nameKey = nameAccountKey(c);
+        if (nameKey) insertedByNameAccount[nameKey] = c;
+      }
+
+      for (const dup of deferredInFileDups) {
+        const first = dup.firstRowData;
+        const existing =
+          (normEmail(first.email) && insertedByEmail[normEmail(first.email)]) ||
+          (normPhone(first.primaryPhone) && insertedByPhone[normPhone(first.primaryPhone)]) ||
+          (nameAccountKey(first) && insertedByNameAccount[nameAccountKey(first)]);
+
+        if (existing) {
+          await duplicateRepository.create({
+            prospectId1: existing._id,
+            entityType:  "Contact",
+            newData:     dup.preparedRow,
+            matchFields: dup.matchFields,
+            source:      "import",
+            importLogId: importLog._id,
+            status:      "pending",
+          });
+          duplicateRows.push({
+            newData:      dup.preparedRow,
+            existingData: existing,
+            matchFields:  dup.matchFields,
+          });
+        }
+      }
     }
 
     const allErrors     = [...errorDetails, ...insertErrors];
@@ -209,11 +271,15 @@ const contactImportService = {
 
       try {
         if (action === "skip") {
-          // Keep existing, ignore new
           results.skipped++;
 
         } else if (action === "merge") {
-          // Update existing contact with new data (only fill empty fields)
+          const existingContact = await Contact.findById(existingId).lean();
+          if (!existingContact) {
+            results.errors.push({ existingId, action, error: "Existing contact not found" });
+            continue;
+          }
+
           const updateData = {};
           const mergeFields = [
             "standardizedRoles", "functionalDomain", "keyFocusAreas",
@@ -224,7 +290,9 @@ const contactImportService = {
           ];
 
           for (const field of mergeFields) {
-            if (newData[field]) updateData[field] = newData[field];
+            if (hasValue(newData[field]) && isEmpty(existingContact[field])) {
+              updateData[field] = newData[field];
+            }
           }
 
           if (Object.keys(updateData).length > 0) {
@@ -234,7 +302,6 @@ const contactImportService = {
           results.merged++;
 
         } else if (action === "keep_both") {
-          // Save as new separate contact
           const { _id, ...newContactData } = newData;
           await Contact.create({ ...newContactData, importLogId });
           results.kept_both++;

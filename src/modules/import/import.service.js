@@ -6,7 +6,21 @@ import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
 import auditLogService from "../auditLog/auditLog.service.js";
 import contactRepository from "../contacts/contact.repository.js";
+import Contact from "../contacts/contact.model.js";
 import Prospect from "../prospect/prospect.model.js";
+import {
+  isEmpty,
+  hasValue,
+  buildContactDedupIndexes,
+  findDbContactDuplicate,
+  createInFileDedupTracker,
+  checkInFileDuplicate,
+  registerInFileRow,
+  fetchExistingContactsForDedup,
+  normEmail,
+  normPhone,
+  nameAccountKey,
+} from "../../common/utils/contactDedup.js";
 
 const CHUNK_SIZE = 1000;
 
@@ -209,9 +223,91 @@ const importService = {
       }
     }
 
+    // Dedup auto-created contacts against DB + within the same file (B6)
+    const existingForDedup = await fetchExistingContactsForDedup(Contact, contactsToInsert);
+    const dedupIndexes     = buildContactDedupIndexes(existingForDedup);
+    const fileTracker      = createInFileDedupTracker();
+    const contactsNew      = [];
+    const deferredInFileDups = [];
+    let contactDupCount    = 0;
+
+    for (const contact of contactsToInsert) {
+      const dbDup = findDbContactDuplicate(contact, dedupIndexes);
+      if (dbDup) {
+        await duplicateRepository.create({
+          prospectId1: dbDup.existing._id,
+          entityType:  "Contact",
+          newData:     contact,
+          matchFields: dbDup.matchFields,
+          source:      "import",
+          importLogId: importLog._id,
+          status:      "pending",
+        });
+        contactDupCount++;
+        continue;
+      }
+
+      const inFileDup = checkInFileDuplicate(contact, fileTracker);
+      if (inFileDup) {
+        deferredInFileDups.push({
+          contact,
+          matchFields:  inFileDup.matchFields,
+          firstRowData: inFileDup.firstRow,
+        });
+        insertErrors.push(
+          `In-file contact duplicate (${inFileDup.matchFields.join(", ")}): ` +
+          `${contact.email || contact.primaryPhone || `${contact.firstName} ${contact.lastName}`.trim()}`
+        );
+        continue;
+      }
+
+      registerInFileRow(contact, fileTracker);
+      contactsNew.push(contact);
+    }
+
     let contactsSaved = 0;
-    for (let i = 0; i < contactsToInsert.length; i += CHUNK_SIZE) {
-      contactsSaved += await safeInsertMany(contactRepository, contactsToInsert.slice(i, i + CHUNK_SIZE), `C${Math.floor(i / CHUNK_SIZE) + 1}`);
+    for (let i = 0; i < contactsNew.length; i += CHUNK_SIZE) {
+      contactsSaved += await safeInsertMany(contactRepository, contactsNew.slice(i, i + CHUNK_SIZE), `C${Math.floor(i / CHUNK_SIZE) + 1}`);
+    }
+
+    // Flag in-file duplicates for review once the first row is in DB
+    if (deferredInFileDups.length > 0 && contactsSaved > 0) {
+      const insertedContacts = await Contact.find({ importLogId: importLog._id })
+        .select("_id email primaryPhone firstName lastName accountName")
+        .lean();
+
+      const insertedByEmail = {};
+      const insertedByPhone = {};
+      const insertedByNameAccount = {};
+      for (const c of insertedContacts) {
+        const email = normEmail(c.email);
+        if (email) insertedByEmail[email] = c;
+        const phone = normPhone(c.primaryPhone);
+        if (phone) insertedByPhone[phone] = c;
+        const nameKey = nameAccountKey(c);
+        if (nameKey) insertedByNameAccount[nameKey] = c;
+      }
+
+      for (const dup of deferredInFileDups) {
+        const first = dup.firstRowData;
+        const existing =
+          (normEmail(first.email) && insertedByEmail[normEmail(first.email)]) ||
+          (normPhone(first.primaryPhone) && insertedByPhone[normPhone(first.primaryPhone)]) ||
+          (nameAccountKey(first) && insertedByNameAccount[nameAccountKey(first)]);
+
+        if (existing) {
+          await duplicateRepository.create({
+            prospectId1: existing._id,
+            entityType:  "Contact",
+            newData:     dup.contact,
+            matchFields: dup.matchFields,
+            source:      "import",
+            importLogId: importLog._id,
+            status:      "pending",
+          });
+          contactDupCount++;
+        }
+      }
     }
 
     // Auto-link unlinked contacts
@@ -231,7 +327,7 @@ const importService = {
 
     // Update import log
     const allErrors   = [...errorDetails, ...insertErrors];
-    const hasDuplicates = duplicateRows.length > 0;
+    const hasDuplicates = duplicateRows.length > 0 || contactDupCount > 0;
     const finalStatus =
       successCount === 0 && !hasDuplicates ? "failed"     :
       hasDuplicates                        ? "partial"    :
@@ -252,8 +348,8 @@ const importService = {
       action:      "IMPORT",
       entity:      "Import",
       entityId:    importLog._id,
-      description: `Account import — ${successCount} saved, ${duplicateRows.length} duplicates need review`,
-      metadata:    { successCount, duplicateCount: duplicateRows.length, contactsSaved },
+      description: `Account import — ${successCount} saved, ${duplicateRows.length + contactDupCount} duplicates need review`,
+      metadata:    { successCount, duplicateCount: duplicateRows.length + contactDupCount, contactsSaved },
     });
 
     console.log(`🏁 Import done — ${successCount} saved | ${duplicateRows.length} duplicates pending | Contacts: ${contactsSaved}`);
@@ -289,7 +385,12 @@ const importService = {
           results.skipped++;
 
         } else if (action === "merge") {
-          // Update existing record with new data fields
+          const existingProspect = await prospectRepository.findById(existingId);
+          if (!existingProspect) {
+            results.errors.push({ existingId, action, error: "Existing prospect not found" });
+            continue;
+          }
+
           const updateData = {};
           const mergeFields = [
             "primaryIndustry", "businessModel", "country", "hqLocationCity",
@@ -301,8 +402,7 @@ const importService = {
           ];
 
           for (const field of mergeFields) {
-            // Only update if new data has a value and existing is null/empty
-            if (newData[field] && !newData[field] === false) {
+            if (hasValue(newData[field]) && isEmpty(existingProspect[field])) {
               updateData[field] = newData[field];
             }
           }
