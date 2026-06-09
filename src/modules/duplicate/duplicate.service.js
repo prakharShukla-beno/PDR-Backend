@@ -72,8 +72,7 @@ const duplicateService = {
 
     if (!duplicate.newData) throw Object.assign(new Error("No newData to save"), { statusCode: 400 });
 
-    // Detect if this is a contact duplicate (matched on email field)
-    const isContactDup = duplicate.matchFields?.includes("email") && !duplicate.matchFields?.includes("accountName");
+    const isContactDup = duplicate.entityType === "Contact";
 
     if (isContactDup) {
       // Save as new contact
@@ -144,8 +143,7 @@ const duplicateService = {
     if (!duplicate) throw Object.assign(new Error("Not found"), { statusCode: 404 });
     if (duplicate.status !== "pending") throw Object.assign(new Error(`Already ${duplicate.status}`), { statusCode: 400 });
 
-    // Detect if this is a contact duplicate
-    const isContactDup = duplicate.matchFields?.includes("email") && !duplicate.matchFields?.includes("accountName");
+    const isContactDup = duplicate.entityType === "Contact";
 
     if (isContactDup) {
       // Merge contact: update existing contact with new data (only fill empty fields)
