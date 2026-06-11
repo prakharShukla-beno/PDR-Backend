@@ -4,6 +4,57 @@ import { calculateScore }    from "../../common/utils/scoring.js";
 import notificationService   from "../notification/notification.service.js";
 import auditLogService       from "../auditLog/auditLog.service.js";
 
+const EMPLOYEE_RANGES = ["1-50", "51-200", "201-1,000", "1,001-5,000", "5,000+"];
+const INTENT_SIGNALS = [
+  "Hyper-Growth Mode", "Cost Containment", "Risk Mitigation",
+  "Modernization Mandate", "Capital Event", "Regulatory Action",
+  "Earnings Shock", "Strategic Pivot", "Security Incident", "Job Postings",
+];
+const REVENUE_BUCKETS = [
+  "Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M",
+  "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+",
+];
+
+/** True when AI should still fill missing prospect fields */
+export const needsEnrichment = (prospect) => {
+  if (!prospect) return false;
+  return (
+    !prospect.noOfEmployees ||
+    !prospect.intentSignal ||
+    !prospect.financialCapacity ||
+    !prospect.strategicValue ||
+    !prospect.marginPotential ||
+    !prospect.techAdoptionProfile ||
+    !prospect.primaryTechStack?.length
+  );
+};
+
+const normalizeEmployeeRange = (value) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (EMPLOYEE_RANGES.includes(raw)) return raw;
+
+  const nums = raw.replace(/,/g, "").match(/\d+/g)?.map(Number) || [];
+  const max  = nums.length ? Math.max(...nums) : 0;
+
+  if (max >= 5000 || /5000\+|5k\+/i.test(raw)) return "5,000+";
+  if (max >= 1001) return "1,001-5,000";
+  if (max >= 201)  return "201-1,000";
+  if (max >= 51)   return "51-200";
+  if (max >= 1)    return "1-50";
+  return null;
+};
+
+const pickEnum = (value, allowed) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (allowed.includes(raw)) return raw;
+  const lower = raw.toLowerCase();
+  return allowed.find((v) => v.toLowerCase() === lower) || null;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // ── Enrichment prompt — FR-5.1, FR-5.2, FR-5.3 ───────────────────────────────
 const buildEnrichmentPrompt = (prospect) => {
   return `You are a B2B sales intelligence analyst. Analyze the following company data and return enriched insights.
@@ -90,10 +141,14 @@ const enrichSingleProspect = async (prospectId, userId) => {
 
   if (!prospect.primaryIndustry    && suggestions.primaryIndustry)
     updateData.primaryIndustry     = suggestions.primaryIndustry;
-  if (!prospect.annualRevenue       && suggestions.annualRevenue)
-    updateData.annualRevenue       = suggestions.annualRevenue;
-  if (!prospect.noOfEmployees       && suggestions.noOfEmployees)
-    updateData.noOfEmployees       = suggestions.noOfEmployees;
+  if (!prospect.annualRevenue       && suggestions.annualRevenue) {
+    const revenue = pickEnum(suggestions.annualRevenue, REVENUE_BUCKETS);
+    if (revenue) updateData.annualRevenue = revenue;
+  }
+  if (!prospect.noOfEmployees       && suggestions.noOfEmployees) {
+    const employees = normalizeEmployeeRange(suggestions.noOfEmployees);
+    if (employees) updateData.noOfEmployees = employees;
+  }
   if (!prospect.techAdoptionProfile && suggestions.techAdoptionProfile)
     updateData.techAdoptionProfile = suggestions.techAdoptionProfile;
   if (!prospect.financialCapacity   && suggestions.financialCapacity)
@@ -105,13 +160,24 @@ const enrichSingleProspect = async (prospectId, userId) => {
 
   // ── FR-5.3: Update buyer intent signal if available ───────────────────────
   if (parsed.buyerIntentSignal && !prospect.intentSignal) {
-    updateData.intentSignal = parsed.buyerIntentSignal;
+    const intent = pickEnum(parsed.buyerIntentSignal, INTENT_SIGNALS);
+    if (intent) updateData.intentSignal = intent;
   }
 
+  // Task 5 fix: AI detected techStack → save to prospect.primaryTechStack
+  // Only update if prospect.primaryTechStack is empty/null
+  // parsed.techStack is the array Gemini returned e.g. ["AWS", "React", "MongoDB"]
+  if (
+    parsed.techStack &&
+    parsed.techStack.length > 0 &&
+    (!prospect.primaryTechStack || prospect.primaryTechStack.length === 0)
+  ) {
+    updateData.primaryTechStack = parsed.techStack;
+  }
 
   // Save AI-filled fields to DB first
   if (Object.keys(updateData).length > 0) {
-    await prospectRepository.update(prospectId, updateData);
+    await prospectRepository.updateSkipValidation(prospectId, updateData);
   }
 
   // ── SCORING HOOK: Run formula after AI fills the fields ───────────────────
@@ -128,7 +194,7 @@ const enrichSingleProspect = async (prospectId, userId) => {
   const scoreResult     = calculateScore(updatedProspect);
 
   // Save scoring outputs to DB
-  await prospectRepository.update(prospectId, {
+  await prospectRepository.updateSkipValidation(prospectId, {
     techFitScore:  scoreResult.techFitScore,
     finalScore:    scoreResult.finalScore,
     clvRanking:    scoreResult.clvRanking,
@@ -172,8 +238,24 @@ const enrichSingleProspect = async (prospectId, userId) => {
 
 const enrichmentService = {
 
+  needsEnrichment,
+
   enrichSingle: async (prospectId, userId) => {
     return await enrichSingleProspect(prospectId, userId);
+  },
+
+  /** Gemini call with one retry — helps segment bulk runs under rate limits */
+  enrichSingleWithRetry: async (prospectId, userId, retries = 1) => {
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await enrichSingleProspect(prospectId, userId);
+      } catch (err) {
+        lastError = err;
+        if (attempt < retries) await sleep(2000);
+      }
+    }
+    throw lastError;
   },
 
   // Bulk enrichment — runs in background

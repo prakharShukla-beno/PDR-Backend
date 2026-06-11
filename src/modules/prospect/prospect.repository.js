@@ -19,8 +19,9 @@ const prospectRepository = {
       }));
 
       const result = await Prospect.insertMany(prepared, {
-        ordered:   false,  // continue inserting remaining docs if one fails
-        rawResult: true,   // raw result contains insertedCount
+        ordered:        false,  // continue inserting remaining docs if one fails
+        rawResult:      true,   // raw result contains insertedCount
+        runValidators:  false, // imports may carry legacy/messy enum values
         ...options,
       });
       return result;
@@ -65,6 +66,12 @@ const prospectRepository = {
       id,
       data,
       { new: true, runValidators: true }
+    );
+  },
+
+  updateSkipValidation: async (id, data) => {
+    return await Prospect.findByIdAndUpdate(
+      id, data, { new: true, runValidators: false }
     );
   },
 

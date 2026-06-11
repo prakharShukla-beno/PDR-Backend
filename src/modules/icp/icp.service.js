@@ -23,6 +23,99 @@ const expandRegions = (regions = []) => {
   return [...new Set(countries)];
 };
 
+const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const countryInFilter = (countries) => ({
+  $in: countries.map((c) => new RegExp(`^${escapeRegex(c)}$`, "i")),
+});
+
+const countryNinFilter = (countries) => ({
+  $nin: countries.map((c) => new RegExp(`^${escapeRegex(c)}$`, "i")),
+});
+
+const hasNoTechStack = {
+  $or: [
+    { primaryTechStack: { $exists: false } },
+    { primaryTechStack: null },
+    { primaryTechStack: { $size: 0 } },
+  ],
+};
+
+// Seniority keywords for matching against contact.standardizedRoles (no seniority field on Contact)
+const SENIORITY_ROLE_PATTERNS = {
+  "C-Suite":   /Chief|CEO|CFO|CTO|COO|CMO|CIO|CPO|President|Founder/i,
+  "VP":        /\bVP\b|Vice President/i,
+  "Director":  /Director/i,
+  "Manager":   /Manager/i,
+  "Senior IC": /Senior|Lead|Principal|Staff/i,
+};
+
+/** Build MongoDB filter for ICP → prospect matching */
+const buildProspectMatchFilter = (profile) => {
+  const conditions = [];
+
+  const industries = [
+    ...(profile.industries || []),
+    ...(profile.commercialSector || []),
+  ];
+  if (industries.length > 0) {
+    conditions.push({ primaryIndustry: { $in: [...new Set(industries)] } });
+  }
+  if (profile.businessModels?.length > 0) {
+    conditions.push({ businessModel: { $in: profile.businessModels } });
+  }
+  if (profile.commercialCategories?.length > 0) {
+    conditions.push({ commercialCategory: { $in: profile.commercialCategories } });
+  }
+  if (profile.annualRevenues?.length > 0) {
+    conditions.push({ annualRevenue: { $in: profile.annualRevenues } });
+  }
+  if (profile.employeeRanges?.length > 0) {
+    conditions.push({ noOfEmployees: { $in: profile.employeeRanges } });
+  }
+
+  const regionIncludedCountries = expandRegions(profile.targetRegionsInclude || []);
+  const allIncluded = [
+    ...new Set([...regionIncludedCountries, ...(profile.targetCountriesInclude || [])]),
+  ];
+  const regionExcludedCountries = expandRegions(profile.targetRegionsExclude || []);
+  const allExcluded = [
+    ...new Set([
+      ...regionExcludedCountries,
+      ...(profile.targetRegionCountriesExclude || []),
+      ...(profile.targetCountriesExclude || []),
+    ]),
+  ];
+
+  if (allIncluded.length > 0 && allExcluded.length > 0) {
+    const finalIncluded = allIncluded.filter((c) => !allExcluded.includes(c));
+    if (finalIncluded.length > 0) {
+      conditions.push({ country: countryInFilter(finalIncluded) });
+    }
+  } else if (allIncluded.length > 0) {
+    conditions.push({ country: countryInFilter(allIncluded) });
+  } else if (allExcluded.length > 0) {
+    conditions.push({ country: countryNinFilter(allExcluded) });
+  }
+
+  // Include: match any listed tool, or allow prospects with no tech data yet
+  if (profile.techStackInclude?.length > 0) {
+    conditions.push({
+      $or: [
+        { primaryTechStack: { $in: profile.techStackInclude } },
+        hasNoTechStack,
+      ],
+    });
+  }
+  if (profile.techStackExclude?.length > 0) {
+    conditions.push({ primaryTechStack: { $nin: profile.techStackExclude } });
+  }
+
+  if (conditions.length === 0) return {};
+  if (conditions.length === 1) return conditions[0];
+  return { $and: conditions };
+};
+
 const icpService = {
 
   create: async (data, userId) => {
@@ -82,63 +175,7 @@ const icpService = {
       throw error;
     }
 
-    const filter = {};
-
-    // Company filters
-    if (profile.industries?.length > 0)
-      filter.primaryIndustry = { $in: profile.industries };
-    if (profile.businessModels?.length > 0)
-      filter.businessModel   = { $in: profile.businessModels };
-    if (profile.commercialCategories?.length > 0)
-      filter.commercialCategory = { $in: profile.commercialCategories };
-    if (profile.annualRevenues?.length > 0)
-      filter.annualRevenue   = { $in: profile.annualRevenues };
-    if (profile.employeeRanges?.length > 0)
-      filter.noOfEmployees   = { $in: profile.employeeRanges };
-
-    // ── Target Market filter ─────────────────────────────────────────────────
-    // Build included country set from regions + explicit countries
-    const regionIncludedCountries = expandRegions(profile.targetRegionsInclude || []);
-    const allIncluded = [
-      ...new Set([...regionIncludedCountries, ...(profile.targetCountriesInclude || [])]),
-    ];
-
-    // Build excluded country set from:
-    //   1. Fully excluded regions
-    //   2. Per-country exclusions within included regions (e.g. include APAC but exclude Pakistan)
-    //   3. Explicit country exclusions
-    const regionExcludedCountries = expandRegions(profile.targetRegionsExclude || []);
-    const allExcluded = [
-      ...new Set([
-        ...regionExcludedCountries,
-        ...(profile.targetRegionCountriesExclude || []),
-        ...(profile.targetCountriesExclude || []),
-      ]),
-    ];
-
-    if (allIncluded.length > 0 && allExcluded.length > 0) {
-      // Include some, exclude some — $in the included set minus excluded
-      const finalIncluded = allIncluded.filter(c => !allExcluded.includes(c));
-      if (finalIncluded.length > 0) filter.country = { $in: finalIncluded };
-    } else if (allIncluded.length > 0) {
-      filter.country = { $in: allIncluded };
-    } else if (allExcluded.length > 0) {
-      filter.country = { $nin: allExcluded };
-    }
-    // If neither — no country filter applied (match all countries)
-
-    // ── Tech Fit filter ────────────────────────────────────────────────────────
-    // techStackInclude: prospect must have AT LEAST ONE of these tools (Core/Adjacent Match)
-    // techStackExclude: prospect must NOT have ANY of these tools (disqualifies)
-    if (profile.techStackInclude?.length > 0) {
-      filter.primaryTechStack = { $in: profile.techStackInclude };
-    }
-    if (profile.techStackExclude?.length > 0) {
-      filter.primaryTechStack = {
-        ...filter.primaryTechStack,
-        $nin: profile.techStackExclude,
-      };
-    }
+    const filter = buildProspectMatchFilter(profile);
 
     const skip = (Number(page) - 1) * Number(limit);
 
@@ -205,7 +242,15 @@ const icpService = {
       contactFilter.functionalDomain = { $in: persona.targetDepartments };
     }
     if (persona.targetSeniorities.length > 0) {
-      contactFilter.seniority = { $in: persona.targetSeniorities };
+      const patterns = persona.targetSeniorities
+        .map((s) => SENIORITY_ROLE_PATTERNS[s])
+        .filter(Boolean);
+      if (patterns.length > 0) {
+        contactFilter.standardizedRoles = {
+          $regex: patterns.map((p) => p.source).join("|"),
+          $options: "i",
+        };
+      }
     }
     if (persona.targetDesignations.length > 0) {
       contactFilter.standardizedRoles = {
