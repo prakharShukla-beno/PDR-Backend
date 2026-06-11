@@ -1,5 +1,5 @@
 import fs from "fs";
-import { processExcelFile } from "../../common/utils/excelParser.js";
+import { processExcelFile, sanitizeProspectRow } from "../../common/utils/excelParser.js";
 import prospectRepository from "../prospect/prospect.repository.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
 import importLogRepository from "../importLog/importLog.repository.js";
@@ -153,12 +153,12 @@ const importService = {
           matchFields,
         });
       } else {
-        newRows.push({
+        newRows.push(sanitizeProspectRow({
           ...prospectData,
           isDuplicate: false,
           source:      "excel",
           importLogId: importLog._id,
-        });
+        }));
       }
     }
 

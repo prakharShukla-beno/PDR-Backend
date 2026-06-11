@@ -4,6 +4,14 @@ import { calculateScore }   from "../../common/utils/scoring.js";
 import pkg from "xlsx";
 const { utils, write } = pkg;
 
+/** Map `industry` or `primaryIndustry` query param to a MongoDB primaryIndustry filter */
+const buildIndustryFilter = (industry, primaryIndustry) => {
+  const raw = industry ?? primaryIndustry;
+  if (!raw) return null;
+  const values = Array.isArray(raw) ? raw : [raw];
+  return values.length === 1 ? values[0] : { $in: values };
+};
+
 const prospectService = {
 
   // Create prospect with automatic duplicate detection
@@ -42,7 +50,7 @@ const prospectService = {
   getAll: async (query) => {
     const {
       page = 1, limit = 10, search,
-      primaryIndustry, country, salesPriority,
+      industry, primaryIndustry, country, salesPriority,
       isDuplicate, clvRanking, businessModel,
       sortBy = "createdAt", sortOrder = "desc",
     } = query;
@@ -59,7 +67,8 @@ const prospectService = {
       ];
     }
 
-    if (primaryIndustry) filter.primaryIndustry = primaryIndustry;
+    const industryFilter = buildIndustryFilter(industry, primaryIndustry);
+    if (industryFilter) filter.primaryIndustry = industryFilter;
     if (country)         filter.country         = { $regex: country, $options: "i" };
     if (salesPriority)   filter.salesPriority   = salesPriority;
     if (clvRanking)      filter.clvRanking      = clvRanking;
@@ -237,11 +246,12 @@ const prospectService = {
   // Export all matching prospects to Excel file — FR-2.2
   // Supports same filters as getAll, no pagination limit
   exportToExcel: async (query) => {
-    const { search, primaryIndustry, country, salesPriority, clvRanking, businessModel } = query;
+    const { search, industry, primaryIndustry, country, salesPriority, clvRanking, businessModel } = query;
 
     const filter = {};
     if (search)          filter.$or            = [{ accountName: { $regex: search, $options: "i" } }, { website: { $regex: search, $options: "i" } }];
-    if (primaryIndustry) filter.primaryIndustry = primaryIndustry;
+    const industryFilter = buildIndustryFilter(industry, primaryIndustry);
+    if (industryFilter)  filter.primaryIndustry = industryFilter;
     if (country)         filter.country         = { $regex: country, $options: "i" };
     if (salesPriority)   filter.salesPriority   = salesPriority;
     if (clvRanking)      filter.clvRanking      = clvRanking;

@@ -1,7 +1,7 @@
 import segmentRepository    from "./segment.repository.js";
 import Prospect             from "../prospect/prospect.model.js";
 import ICP                  from "../icp/icp.model.js";
-import enrichmentService    from "../enrichment/enrichment.service.js";
+import enrichmentService, { needsEnrichment } from "../enrichment/enrichment.service.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
 
 // ─── Region → Countries map (ICP region logic ke liye) ───────────────────────
@@ -301,27 +301,37 @@ const segmentService = {
       try {
         // Sirf segment ke accounts fetch karo
         const accounts = await Prospect.find({
-          _id: { $in: segment.matchedAccountIds }
-        }).select("_id primaryTechStack secondaryTechStack tertiaryTechStack techFitScore").lean();
+          _id: { $in: segment.matchedAccountIds },
+        })
+          .select(
+            "_id primaryTechStack noOfEmployees intentSignal financialCapacity " +
+            "strategicValue marginPotential techAdoptionProfile annualRevenue"
+          )
+          .lean();
 
         // ICP ke included tech stack
         // These are used in loop for category expansion
         const icpTechInclude = icpProfile?.techStackInclude || [];
         const icpTechExclude = icpProfile?.techStackExclude || [];
 
-        for (const account of accounts) {
+        for (let i = 0; i < accounts.length; i++) {
+          const account = accounts[i];
           try {
-            // ── Step 1: Gemini enrich → primaryTechStack fill karo ────────────
-            // Sirf tab call karo jab techStack empty ho
-            if (!account.primaryTechStack || account.primaryTechStack.length === 0) {
+            // ── Step 1: Gemini enrich missing fields (employees, intent, tech, etc.) ─
+            if (needsEnrichment(account)) {
               try {
-                await enrichmentService.enrichSingle(account._id.toString(), userId);
+                await enrichmentService.enrichSingleWithRetry(
+                  account._id.toString(),
+                  userId
+                );
                 enrichedCount++;
+                // Rate-limit spacing between Gemini calls
+                if (i < accounts.length - 1) {
+                  await new Promise((r) => setTimeout(r, 1500));
+                }
               } catch (enrichErr) {
                 errors.push(`Enrich failed ${account._id}: ${enrichErr.message}`);
               }
-            } else {
-              enrichedCount++; // already enriched
             }
 
             // ── Step 2: Fresh prospect fetch karo (updated techStack ke saath) ─
