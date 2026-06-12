@@ -372,22 +372,60 @@ const ICP_COLUMN_PATTERNS = {
   ],
   employeeRange: [
     "employee", "headcount", "staff", "no of employees", "number of employees",
-    "employee range", "company size",
+    "employee range", "company size", "employees",
   ],
   annualRevenue: [
     "revenue", "arr", "turnover", "annual revenue", "annual turnover", "revenue range",
   ],
+  country: [
+    "country", "region", "market", "geography", "location", "target market",
+    "target region", "preferential market", "country name",
+  ],
+  techStack: [
+    "tech", "technology", "tech stack", "tools", "software", "platform",
+    "primary tech", "tech category", "technologies used", "technology stack", "tech tools",
+  ],
+  designation: [
+    "designation", "title", "job title", "role", "buyer persona", "contact title",
+    "position", "job role", "seniority", "department", "contact role", "persona",
+  ],
 };
+
+const ICP_TECH_STACK_FIELDS = new Set([
+  "primaryTechStack", "secondaryTechStack", "tertiaryTechStack",
+]);
+
+const ICP_CONTACT_PERSONA_FIELDS = new Set([
+  "designation", "department", "seniority", "job1", "job2",
+]);
 
 const ICP_SCHEMA_FIELDS = {
   primaryIndustry: "primaryIndustry",
   employeeRange:   "noOfEmployees",
   annualRevenue:   "annualRevenue",
+  country:         "country",
+  techStack:       "primaryTechStack",
+  designation:     null,
 };
 
-const headerMatchesIcpPattern = (normalizedHeader, pattern) => {
-  const p = pattern.toLowerCase();
-  return normalizedHeader.includes(p) || p.includes(normalizedHeader);
+const headerMatchesIcpPattern = (normalizedHeader, pattern) =>
+  normalizedHeader.includes(pattern.toLowerCase());
+
+const headerMatchesIcpFieldMap = (header, icpKey) => {
+  const mapped = FIELD_MAP[header];
+  if (!mapped) return false;
+
+  const schemaField = ICP_SCHEMA_FIELDS[icpKey];
+  if (schemaField && mapped === schemaField) return true;
+
+  if (icpKey === "techStack" && ICP_TECH_STACK_FIELDS.has(mapped)) return true;
+
+  if (icpKey === "designation" && mapped.startsWith("contact.")) {
+    const contactField = mapped.split(".")[1];
+    return ICP_CONTACT_PERSONA_FIELDS.has(contactField);
+  }
+
+  return false;
 };
 
 export const detectMissingIcpColumns = (headers = []) => {
@@ -395,18 +433,20 @@ export const detectMissingIcpColumns = (headers = []) => {
     .map((h) => normalizeHeader(String(h)))
     .filter(Boolean);
 
-  const missing = [];
+  const missingIcpColumns = [];
 
-  for (const [icpKey, patterns] of Object.entries(ICP_COLUMN_PATTERNS)) {
-    const schemaField = ICP_SCHEMA_FIELDS[icpKey];
-    const found = normalizedHeaders.some((header) => {
-      if (patterns.some((p) => headerMatchesIcpPattern(header, p))) return true;
-      return FIELD_MAP[header] === schemaField;
-    });
-    if (!found) missing.push(icpKey);
+  for (const [field, patterns] of Object.entries(ICP_COLUMN_PATTERNS)) {
+    const found = normalizedHeaders.some((header) =>
+      patterns.some((pattern) => headerMatchesIcpPattern(header, pattern)) ||
+      headerMatchesIcpFieldMap(header, field)
+    );
+    if (!found) missingIcpColumns.push(field);
   }
 
-  return missing;
+  console.log("Detected headers:", normalizedHeaders);
+  console.log("Missing columns:", missingIcpColumns);
+
+  return missingIcpColumns;
 };
 
 export const getExcelHeaders = (filePath) => {
