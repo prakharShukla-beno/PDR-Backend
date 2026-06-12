@@ -54,17 +54,61 @@ const icpValidation = [
     .optional()
     .isInt({ min: 0, max: 100 }).withMessage("minTechFitScore must be between 0 and 100"),
 
-  body("buyerPersona.targetSeniorities")
+  body("buyerPersona.functionalDomains")
     .optional()
-    .isArray().withMessage("targetSeniorities must be an array"),
+    .isArray().withMessage("functionalDomains must be an array"),
 
-  body("buyerPersona.targetDepartments")
+  body("buyerPersona.seniorityLevels")
     .optional()
-    .isArray().withMessage("targetDepartments must be an array"),
+    .isArray().withMessage("seniorityLevels must be an array"),
 
-  body("buyerPersona.targetDesignations")
+  body("buyerPersona.designations")
     .optional()
-    .isArray().withMessage("targetDesignations must be an array"),
+    .isArray().withMessage("designations must be an array"),
+
+  body("description")
+    .optional({ nullable: true })
+    .isString().withMessage("description must be a string"),
+
+  body("commercialCategories")
+    .optional()
+    .isArray().withMessage("commercialCategories must be an array"),
+
+  body("targetRegionsInclude")
+    .optional()
+    .isArray().withMessage("targetRegionsInclude must be an array"),
+
+  body("targetRegionsExclude")
+    .optional()
+    .isArray().withMessage("targetRegionsExclude must be an array"),
+
+  body("targetRegionCountriesExclude")
+    .optional()
+    .isArray().withMessage("targetRegionCountriesExclude must be an array"),
+
+  body("targetCountriesInclude")
+    .optional()
+    .isArray().withMessage("targetCountriesInclude must be an array"),
+
+  body("targetCountriesExclude")
+    .optional()
+    .isArray().withMessage("targetCountriesExclude must be an array"),
+
+  body("techStackInclude")
+    .optional()
+    .isArray().withMessage("techStackInclude must be an array"),
+
+  body("techStackExclude")
+    .optional()
+    .isArray().withMessage("techStackExclude must be an array"),
+
+  body("techCategoriesInclude")
+    .optional()
+    .isArray().withMessage("techCategoriesInclude must be an array"),
+
+  body("techCategoriesExclude")
+    .optional()
+    .isArray().withMessage("techCategoriesExclude must be an array"),
 ];
 
 // POST   /api/icp                        — create a new ICP profile

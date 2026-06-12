@@ -2,14 +2,52 @@ import icpRepository from "./icp.repository.js";
 import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
 
-// Region → Countries mapping (matches image 1 reference)
+// Region → Countries mapping (synced with ICP Builder Preferential Market tab)
 const REGION_COUNTRIES = {
-  "Asia-Pacific (APAC)":   ["China", "Japan", "India", "Australia", "South Korea", "Indonesia", "Singapore"],
-  "Middle East":           ["Saudi Arabia", "UAE", "Israel", "Qatar", "Kuwait", "Jordan", "Oman"],
-  "Africa":                ["Nigeria", "South Africa", "Kenya", "Egypt", "Ghana", "Ethiopia"],
-  "Europe":                ["Germany", "UK", "France", "Italy", "Spain", "Netherlands", "Switzerland"],
-  "North America (NA)":    ["United States", "Canada"],
-  "Latin America (LATAM)": ["Brazil", "Mexico", "Argentina", "Chile", "Colombia", "Peru"],
+  "North America (NA)": ["United States", "Canada", "Mexico"],
+  "Europe": [
+    "United Kingdom", "Germany", "France", "Netherlands", "Sweden",
+    "Norway", "Denmark", "Finland", "Switzerland", "Austria", "Belgium",
+    "Spain", "Italy", "Portugal", "Ireland", "Poland", "Czech Republic",
+    "Hungary", "Romania", "Bulgaria", "Greece", "Croatia", "Slovakia",
+    "Slovenia", "Estonia", "Latvia", "Lithuania", "Luxembourg", "Malta",
+    "Cyprus", "Iceland", "Serbia", "Ukraine", "Belarus", "Bosnia and Herzegovina",
+  ],
+  "Asia-Pacific (APAC)": [
+    "China", "Japan", "South Korea", "Australia", "New Zealand",
+    "Hong Kong", "Taiwan", "Macau", "Mongolia", "Papua New Guinea",
+    "Fiji", "Samoa", "Tonga", "Vanuatu", "Solomon Islands",
+  ],
+  "South Asia": [
+    "India", "Pakistan", "Bangladesh", "Sri Lanka", "Nepal",
+    "Bhutan", "Maldives", "Afghanistan",
+  ],
+  "Southeast Asia": [
+    "Singapore", "Indonesia", "Malaysia", "Thailand", "Vietnam",
+    "Philippines", "Myanmar", "Cambodia", "Laos", "Brunei",
+    "Timor-Leste",
+  ],
+  "Middle East": [
+    "Turkey", "Israel", "Jordan", "Lebanon", "Syria", "Iraq",
+    "Iran", "Yemen", "Oman", "Kuwait", "Bahrain", "Qatar",
+  ],
+  "GCC": [
+    "Saudi Arabia", "United Arab Emirates", "Qatar", "Kuwait",
+    "Bahrain", "Oman",
+  ],
+  "Latin America (LATAM)": [
+    "Brazil", "Mexico", "Argentina", "Colombia", "Chile", "Peru",
+    "Venezuela", "Ecuador", "Bolivia", "Paraguay", "Uruguay",
+    "Costa Rica", "Panama", "Guatemala", "Honduras", "El Salvador",
+    "Nicaragua", "Dominican Republic", "Cuba", "Puerto Rico",
+    "Trinidad and Tobago", "Jamaica",
+  ],
+  "Africa": [
+    "South Africa", "Nigeria", "Kenya", "Egypt", "Ghana", "Ethiopia",
+    "Tanzania", "Uganda", "Rwanda", "Senegal", "Ivory Coast",
+    "Cameroon", "Angola", "Mozambique", "Zambia", "Zimbabwe",
+    "Morocco", "Tunisia", "Algeria", "Libya", "Sudan",
+  ],
 };
 
 // Expand regions to country arrays — used in DB query
@@ -39,15 +77,6 @@ const hasNoTechStack = {
     { primaryTechStack: null },
     { primaryTechStack: { $size: 0 } },
   ],
-};
-
-// Seniority keywords for matching against contact.standardizedRoles (no seniority field on Contact)
-const SENIORITY_ROLE_PATTERNS = {
-  "C-Suite":   /Chief|CEO|CFO|CTO|COO|CMO|CIO|CPO|President|Founder/i,
-  "VP":        /\bVP\b|Vice President/i,
-  "Director":  /Director/i,
-  "Manager":   /Manager/i,
-  "Senior IC": /Senior|Lead|Principal|Staff/i,
 };
 
 /** Build MongoDB filter for ICP → prospect matching */
@@ -164,13 +193,100 @@ const buildMatchDiagnosis = async (profile) => {
     }
   }
 
+  if (profile.targetRegionsInclude?.length > 0 || profile.targetCountriesInclude?.length > 0) {
+    const nullCount = await Prospect.countDocuments(emptyFieldFilter("country"));
+    if (nullCount > 0) {
+      diagnosis.country = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  if (profile.techCategoriesInclude?.length > 0 || profile.techStackInclude?.length > 0) {
+    const nullCount = await Prospect.countDocuments(hasNoTechStack);
+    if (nullCount > 0) {
+      diagnosis.techStack = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  if (profile.buyerPersona?.designations?.length > 0) {
+    const accountsWithContactRoles = await Contact.distinct("accountId", {
+      isLinked: true,
+      standardizedRoles: { $nin: [null, ""] },
+    });
+    const nullCount = totalProspects - accountsWithContactRoles.length;
+    if (nullCount > 0) {
+      diagnosis.designation = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
   return diagnosis;
+};
+
+const ALLOWED_ICP_FIELDS = [
+  "name", "description", "industries", "commercialSectors", "subSectors",
+  "mappedIndustries", "businessModels", "annualRevenues", "employeeRanges",
+  "commercialCategories", "targetRegionsInclude", "targetRegionsExclude",
+  "targetRegionCountriesExclude", "targetCountriesInclude", "targetCountriesExclude",
+  "techStackInclude", "techStackExclude", "techCategoriesInclude", "techCategoriesExclude",
+  "buyerPersona", "isActive",
+];
+
+const normalizeBuyerPersona = (persona = {}) => ({
+  functionalDomains: Array.isArray(persona.functionalDomains) ? persona.functionalDomains : [],
+  seniorityLevels:   Array.isArray(persona.seniorityLevels)   ? persona.seniorityLevels   : [],
+  designations:      Array.isArray(persona.designations)      ? persona.designations      : [],
+});
+
+/** Pick only schema-known fields and normalize nested buyerPersona */
+const sanitizeIcpPayload = (data = {}) => {
+  const payload = {};
+
+  for (const key of ALLOWED_ICP_FIELDS) {
+    if (data[key] !== undefined) payload[key] = data[key];
+  }
+
+  // Legacy / mistaken frontend keys → canonical schema fields
+  if (!payload.targetRegionsInclude?.length && Array.isArray(data.regionsInclude)) {
+    payload.targetRegionsInclude = data.regionsInclude;
+  }
+  if (!payload.targetRegionsExclude?.length && Array.isArray(data.regionsExclude)) {
+    payload.targetRegionsExclude = data.regionsExclude;
+  }
+  if (!payload.targetCountriesInclude?.length && Array.isArray(data.countriesInclude)) {
+    payload.targetCountriesInclude = data.countriesInclude;
+  }
+  if (!payload.targetCountriesExclude?.length && Array.isArray(data.countriesExclude)) {
+    payload.targetCountriesExclude = data.countriesExclude;
+  }
+  if (Array.isArray(data.countries) && !payload.targetCountriesInclude?.length) {
+    payload.targetCountriesInclude = data.countries;
+  }
+
+  if (data.buyerPersona !== undefined || payload.buyerPersona !== undefined) {
+    payload.buyerPersona = normalizeBuyerPersona(data.buyerPersona ?? payload.buyerPersona);
+  }
+
+  if (payload.description === "") payload.description = null;
+
+  return payload;
 };
 
 const icpService = {
 
   create: async (data, userId) => {
-    return await icpRepository.create({ ...data, createdBy: userId });
+    const payload = sanitizeIcpPayload(data);
+    return await icpRepository.create({ ...payload, createdBy: userId });
   },
 
   getAll: async ({ page, limit, isActive }) => {
@@ -203,7 +319,7 @@ const icpService = {
       error.statusCode = 404;
       throw error;
     }
-    return await icpRepository.update(id, data);
+    return await icpRepository.update(id, sanitizeIcpPayload(data));
   },
 
   delete: async (id) => {
@@ -282,40 +398,23 @@ const icpService = {
       throw error;
     }
 
-    const persona = profile.buyerPersona;
+    const persona = profile.buyerPersona || {};
+    const designations =
+      persona.designations?.length > 0
+        ? persona.designations
+        : (persona.targetDesignations || []);
 
-    if (
-      persona.targetSeniorities.length  === 0 &&
-      persona.targetDepartments.length  === 0 &&
-      persona.targetDesignations.length === 0
-    ) {
-      const error = new Error("No buyer persona criteria defined in this ICP profile");
+    if (designations.length === 0) {
+      const error = new Error("No buyer persona designations defined in this ICP profile");
       error.statusCode = 400;
       throw error;
     }
 
     const contactFilter = { isLinked: true };
 
-    // Fixed: separate if-blocks for each persona field
-    if (persona.targetDepartments.length > 0) {
-      contactFilter.functionalDomain = { $in: persona.targetDepartments };
-    }
-    if (persona.targetSeniorities.length > 0) {
-      const patterns = persona.targetSeniorities
-        .map((s) => SENIORITY_ROLE_PATTERNS[s])
-        .filter(Boolean);
-      if (patterns.length > 0) {
-        contactFilter.standardizedRoles = {
-          $regex: patterns.map((p) => p.source).join("|"),
-          $options: "i",
-        };
-      }
-    }
-    if (persona.targetDesignations.length > 0) {
-      contactFilter.standardizedRoles = {
-        $in: persona.targetDesignations.map(d => new RegExp(d, "i")),
-      };
-    }
+    contactFilter.standardizedRoles = {
+      $in: designations.map((d) => new RegExp(escapeRegex(d), "i")),
+    };
 
     const skip = (Number(page) - 1) * Number(limit);
 

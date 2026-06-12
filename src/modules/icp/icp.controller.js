@@ -6,6 +6,8 @@ const icpController = {
   // POST /api/icp — naya ICP profile banao
   create: async (req, res, next) => {
     try {
+      console.log("[ICP create] req.body:", JSON.stringify(req.body, null, 2));
+
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({
@@ -22,6 +24,20 @@ const icpController = {
         data: profile,
       });
     } catch (error) {
+      console.error("[ICP create] error:", error.message);
+      if (error.errors) {
+        console.error("[ICP create] validation details:", JSON.stringify(error.errors, null, 2));
+      }
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+          errors: Object.entries(error.errors || {}).map(([field, err]) => ({
+            field,
+            message: err.message,
+          })),
+        });
+      }
       next(error);
     }
   },
@@ -55,6 +71,8 @@ const icpController = {
   // PUT /api/icp/:id — update the profile
   update: async (req, res, next) => {
     try {
+      console.log("[ICP update] req.body:", JSON.stringify(req.body, null, 2));
+
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({
@@ -70,6 +88,20 @@ const icpController = {
         data: profile,
       });
     } catch (error) {
+      console.error("[ICP update] error:", error.message);
+      if (error.errors) {
+        console.error("[ICP update] validation details:", JSON.stringify(error.errors, null, 2));
+      }
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+          errors: Object.entries(error.errors || {}).map(([field, err]) => ({
+            field,
+            message: err.message,
+          })),
+        });
+      }
       next(error);
     }
   },
