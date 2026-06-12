@@ -54,16 +54,17 @@ const SENIORITY_ROLE_PATTERNS = {
 const buildProspectMatchFilter = (profile) => {
   const conditions = [];
 
-  const industries = [
-    ...(profile.industries || []),
-    ...(profile.commercialSector || []),
-  ];
-  if (industries.length > 0) {
-    conditions.push({ primaryIndustry: { $in: [...new Set(industries)] } });
+  // Prospect.primaryIndustry stores leaf-level values (e.g. "FMCG"), not sector-level
+  // (e.g. "Retail, CPG & Hospitality"). Match only against ICP mappedIndustries.
+  const mappedIndustries = profile.mappedIndustries || [];
+  if (mappedIndustries.length > 0) {
+    conditions.push({ primaryIndustry: { $in: mappedIndustries } });
   }
+  // Optional — if empty, skip filter so all prospects pass this dimension
   if (profile.businessModels?.length > 0) {
     conditions.push({ businessModel: { $in: profile.businessModels } });
   }
+  // Optional — if empty, skip filter so all prospects pass this dimension
   if (profile.commercialCategories?.length > 0) {
     conditions.push({ commercialCategory: { $in: profile.commercialCategories } });
   }
@@ -114,6 +115,56 @@ const buildProspectMatchFilter = (profile) => {
   if (conditions.length === 0) return {};
   if (conditions.length === 1) return conditions[0];
   return { $and: conditions };
+};
+
+const emptyFieldFilter = (field) => ({
+  $or: [
+    { [field]: null },
+    { [field]: "" },
+    { [field]: { $exists: false } },
+  ],
+});
+
+/** Diagnose missing prospect data for active ICP filters (0-match scenarios) */
+const buildMatchDiagnosis = async (profile) => {
+  const diagnosis      = {};
+  const totalProspects = await Prospect.countDocuments({});
+  if (totalProspects === 0) return diagnosis;
+
+  if (profile.mappedIndustries?.length > 0) {
+    const nullCount = await Prospect.countDocuments(emptyFieldFilter("primaryIndustry"));
+    if (nullCount > 0) {
+      diagnosis.primaryIndustry = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  if (profile.employeeRanges?.length > 0) {
+    const nullCount = await Prospect.countDocuments(emptyFieldFilter("noOfEmployees"));
+    if (nullCount > 0) {
+      diagnosis.employeeRange = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  if (profile.annualRevenues?.length > 0) {
+    const nullCount = await Prospect.countDocuments(emptyFieldFilter("annualRevenue"));
+    if (nullCount > 0) {
+      diagnosis.annualRevenue = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  return diagnosis;
 };
 
 const icpService = {
@@ -202,9 +253,17 @@ const icpService = {
       contactCount: countMap[p._id.toString()] || 0,
     }));
 
+    const totalProspectsInDb = await Prospect.countDocuments({});
+    const matchRatio         = totalProspectsInDb > 0 ? total / totalProspectsInDb : 0;
+    const shouldDiagnose     = total === 0 || matchRatio < 0.05;
+    const diagnosis          = (shouldDiagnose && total === 0)
+      ? await buildMatchDiagnosis(profile)
+      : {};
+
     return {
       icpProfile: { id: profile._id, name: profile.name },
       prospects:  enrichedProspects,
+      diagnosis,
       pagination: {
         total,
         page:       Number(page),

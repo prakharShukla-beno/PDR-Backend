@@ -1,5 +1,11 @@
 import fs from "fs";
-import { processExcelFile, sanitizeProspectRow } from "../../common/utils/excelParser.js";
+import {
+  processExcelFile,
+  sanitizeProspectRow,
+  getExcelHeaders,
+  detectMissingIcpColumns,
+  previewExcelFile,
+} from "../../common/utils/excelParser.js";
 import prospectRepository from "../prospect/prospect.repository.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
 import importLogRepository from "../importLog/importLog.repository.js";
@@ -63,8 +69,18 @@ const importService = {
   // ACCOUNT EXCEL IMPORT — Step 1
   // Save non-duplicates and return duplicates to the user for review
   // ===========================================================================
+  previewExcelImport: async (filePath) => {
+    try {
+      return previewExcelFile(filePath);
+    } finally {
+      try { fs.unlinkSync(filePath); } catch (_) {}
+    }
+  },
+
   processExcelImport: async (filePath, userId) => {
 
+    const headers           = getExcelHeaders(filePath);
+    const missingIcpColumns = detectMissingIcpColumns(headers);
     const { validRows, errorDetails, totalRows } = processExcelFile(filePath);
 
     console.log(`📊 Total: ${totalRows}, Valid: ${validRows.length}, Errors: ${errorDetails.length}`);
@@ -83,7 +99,11 @@ const importService = {
     if (!validRows || validRows.length === 0) {
       await importLogRepository.update(importLog._id, { status: "failed", failedCount: errorDetails.length });
       try { fs.unlinkSync(filePath); } catch (_) {}
-      return { importLogId: importLog._id, totalRows, successCount: 0, failedCount: errorDetails.length, duplicates: [], contactsSaved: 0, errorDetails, status: "failed" };
+      return {
+        importLogId: importLog._id, totalRows, successCount: 0,
+        failedCount: errorDetails.length, duplicates: [], contactsSaved: 0,
+        errorDetails, status: "failed", missingIcpColumns,
+      };
     }
 
     // Check which rows already exist in DB
@@ -365,6 +385,7 @@ const importService = {
       hasDuplicates:  hasDuplicates,
       errorDetails:   allErrors,
       status:         finalStatus,
+      missingIcpColumns,
     };
   },
 

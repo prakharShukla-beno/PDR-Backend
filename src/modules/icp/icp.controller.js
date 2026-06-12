@@ -95,6 +95,7 @@ const icpController = {
         data:       result.prospects,
         icpProfile: result.icpProfile,
         pagination: result.pagination,
+        diagnosis:  result.diagnosis || {},
       });
     } catch (error) {
       next(error);

@@ -40,6 +40,9 @@ const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 102
 const router = Router();
 router.use(authMiddleware);
 
+// Preview Excel headers before import (ICP column warning)
+router.post("/excel/preview", upload.single("file"), importController.previewExcel);
+
 // Upload account Excel file
 router.post("/excel", upload.single("file"), importController.uploadExcel);
 
