@@ -27,8 +27,16 @@ app.set("query parser", (str) =>
   qs.parse(str, { allowDots: true, arrayLimit: 100 })
 );
 
+const corsOrigins = [
+  "https://pdr-frontend-five.vercel.app",
+  "http://localhost:3000",
+];
+if (process.env.FRONTEND_URL) {
+  corsOrigins.push(process.env.FRONTEND_URL.replace(/\/+$/, ""));
+}
+
 app.use(helmet());
-app.use(cors());
+app.use(cors({ origin: corsOrigins }));
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
