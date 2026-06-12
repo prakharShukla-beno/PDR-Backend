@@ -1,6 +1,18 @@
 import mongoose from "mongoose";
 import { INDUSTRIES } from "../../common/constants/taxonomy.js";
 
+const ICP_REGIONS = [
+  "North America (NA)",
+  "Europe",
+  "Asia-Pacific (APAC)",
+  "South Asia",
+  "Southeast Asia",
+  "Middle East",
+  "GCC",
+  "Latin America (LATAM)",
+  "Africa",
+];
+
 const icpSchema = new mongoose.Schema(
   {
     name: {
@@ -57,8 +69,8 @@ const icpSchema = new mongoose.Schema(
 
     // ── Target Market — replaces flat countries[] ────────────────────────────
     // Regions: include = match, exclude = block
-    targetRegionsInclude: { type: [String], default: [] },
-    targetRegionsExclude: { type: [String], default: [] },
+    targetRegionsInclude: { type: [String], enum: ICP_REGIONS, default: [] },
+    targetRegionsExclude: { type: [String], enum: ICP_REGIONS, default: [] },
 
     // Per-country exclusions within included regions (e.g. include APAC but exclude Pakistan)
     targetRegionCountriesExclude: { type: [String], default: [] },
@@ -91,13 +103,9 @@ const icpSchema = new mongoose.Schema(
 
     // ── Buyer Persona ────────────────────────────────────────────────────────
     buyerPersona: {
-      targetSeniorities: {
-        type: [String],
-        enum: ["C-Suite", "VP", "Director", "Manager", "Senior IC"],
-        default: [],
-      },
-      targetDepartments: { type: [String], default: [] },
-      targetDesignations: { type: [String], default: [] },
+      functionalDomains: { type: [String], default: [] },
+      seniorityLevels:   { type: [String], default: [] },
+      designations:      { type: [String], default: [] },
     },
 
     isActive: { type: Boolean, default: true },
