@@ -365,6 +365,61 @@ const validateRow = (row, rowNumber) => {
   return errors;
 };
 
+// ── ICP-critical column detection (header row only) ─────────────────────────
+const ICP_COLUMN_PATTERNS = {
+  primaryIndustry: [
+    "industry", "sector", "business type", "primary industry", "commercial sector",
+  ],
+  employeeRange: [
+    "employee", "headcount", "staff", "no of employees", "number of employees",
+    "employee range", "company size",
+  ],
+  annualRevenue: [
+    "revenue", "arr", "turnover", "annual revenue", "annual turnover", "revenue range",
+  ],
+};
+
+const ICP_SCHEMA_FIELDS = {
+  primaryIndustry: "primaryIndustry",
+  employeeRange:   "noOfEmployees",
+  annualRevenue:   "annualRevenue",
+};
+
+const headerMatchesIcpPattern = (normalizedHeader, pattern) => {
+  const p = pattern.toLowerCase();
+  return normalizedHeader.includes(p) || p.includes(normalizedHeader);
+};
+
+export const detectMissingIcpColumns = (headers = []) => {
+  const normalizedHeaders = headers
+    .map((h) => normalizeHeader(String(h)))
+    .filter(Boolean);
+
+  const missing = [];
+
+  for (const [icpKey, patterns] of Object.entries(ICP_COLUMN_PATTERNS)) {
+    const schemaField = ICP_SCHEMA_FIELDS[icpKey];
+    const found = normalizedHeaders.some((header) => {
+      if (patterns.some((p) => headerMatchesIcpPattern(header, p))) return true;
+      return FIELD_MAP[header] === schemaField;
+    });
+    if (!found) missing.push(icpKey);
+  }
+
+  return missing;
+};
+
+export const getExcelHeaders = (filePath) => {
+  const workbook  = readFile(filePath);
+  const sheetName = workbook.SheetNames[0];
+  const sheet     = workbook.Sheets[sheetName];
+  const rows      = utils.sheet_to_json(sheet, { header: 1, defval: null, raw: false });
+  const headerRow = rows[0] || [];
+  return headerRow
+    .filter((h) => h !== null && h !== undefined && String(h).trim() !== "")
+    .map((h) => String(h));
+};
+
 export const processExcelFile = (filePath) => {
   const rawRows = parseExcel(filePath);
   const validRows = [];
@@ -387,4 +442,24 @@ export const processExcelFile = (filePath) => {
   });
 
   return { validRows, errorDetails, totalRows };
+};
+
+export const previewExcelFile = (filePath) => {
+  const headers           = getExcelHeaders(filePath);
+  const missingIcpColumns = detectMissingIcpColumns(headers);
+  const { validRows, totalRows, errorDetails } = processExcelFile(filePath);
+
+  return {
+    headers,
+    missingIcpColumns,
+    previewRows: validRows.slice(0, 5).map((row) => ({
+      accountName:     row.accountName     || "",
+      primaryIndustry: row.primaryIndustry || "",
+      noOfEmployees:   row.noOfEmployees   || "",
+      annualRevenue:   row.annualRevenue   || "",
+      country:         row.country         || "",
+    })),
+    totalRows,
+    errorCount: errorDetails.length,
+  };
 };

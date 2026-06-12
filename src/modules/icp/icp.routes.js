@@ -20,6 +20,20 @@ const icpValidation = [
     .custom((arr) => arr.every((v) => INDUSTRIES.includes(v)))
     .withMessage("Invalid industry value"),
 
+  body("commercialSectors")
+    .optional()
+    .isArray().withMessage("commercialSectors must be an array")
+    .custom((arr) => arr.every((v) => INDUSTRIES.includes(v)))
+    .withMessage("Invalid commercial sector value"),
+
+  body("subSectors")
+    .optional()
+    .isArray().withMessage("subSectors must be an array"),
+
+  body("mappedIndustries")
+    .optional()
+    .isArray().withMessage("mappedIndustries must be an array"),
+
   body("businessModels")
     .optional()
     .isArray().withMessage("businessModels must be an array"),

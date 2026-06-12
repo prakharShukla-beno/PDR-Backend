@@ -4,7 +4,10 @@ import { calculateScore }    from "../../common/utils/scoring.js";
 import notificationService   from "../notification/notification.service.js";
 import auditLogService       from "../auditLog/auditLog.service.js";
 
-const EMPLOYEE_RANGES = ["1-50", "51-200", "201-1,000", "1,001-5,000", "5,000+"];
+const EMPLOYEE_RANGES = [
+  "1-10", "11-50", "51-200", "201-500", "501-1,000",
+  "1,001-5,000", "5,001-10,000", "10,000+",
+];
 const INTENT_SIGNALS = [
   "Hyper-Growth Mode", "Cost Containment", "Risk Mitigation",
   "Modernization Mandate", "Capital Event", "Regulatory Action",
@@ -37,11 +40,14 @@ const normalizeEmployeeRange = (value) => {
   const nums = raw.replace(/,/g, "").match(/\d+/g)?.map(Number) || [];
   const max  = nums.length ? Math.max(...nums) : 0;
 
-  if (max >= 5000 || /5000\+|5k\+/i.test(raw)) return "5,000+";
-  if (max >= 1001) return "1,001-5,000";
-  if (max >= 201)  return "201-1,000";
-  if (max >= 51)   return "51-200";
-  if (max >= 1)    return "1-50";
+  if (max >= 10000 || /10,?000\+|10k\+/i.test(raw)) return "10,000+";
+  if (max >= 5001)  return "5,001-10,000";
+  if (max >= 1001)  return "1,001-5,000";
+  if (max >= 501)   return "501-1,000";
+  if (max >= 201)   return "201-500";
+  if (max >= 51)    return "51-200";
+  if (max >= 11)    return "11-50";
+  if (max >= 1)     return "1-10";
   return null;
 };
 
