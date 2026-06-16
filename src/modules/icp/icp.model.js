@@ -109,6 +109,9 @@ const icpSchema = new mongoose.Schema(
     },
 
     isActive: { type: Boolean, default: true },
+
+    // Company benchmark ICP — only one may be true (enforced in service layer)
+    isBenchmark: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
