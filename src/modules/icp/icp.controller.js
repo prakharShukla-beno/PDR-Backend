@@ -116,6 +116,25 @@ const icpController = {
     }
   },
 
+  // POST /api/icp/:id/create-segment — create segment from ICP matches
+  createSegment: async (req, res, next) => {
+    try {
+      const segment = await icpService.createSegmentFromIcp(
+        req.params.id,
+        req.user._id,
+        { name: req.body?.name, isShared: req.body?.isShared }
+      );
+
+      res.status(201).json({
+        success: true,
+        message: `Segment created with ${segment.matchCount} matching accounts`,
+        data: segment,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // GET /api/icp/:id/match-prospects — match prospects using ICP criteria
   matchProspects: async (req, res, next) => {
     try {
@@ -128,6 +147,36 @@ const icpController = {
         icpProfile: result.icpProfile,
         pagination: result.pagination,
         diagnosis:  result.diagnosis || {},
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // GET /api/icp/benchmark — get company benchmark ICP
+  getBenchmark: async (req, res, next) => {
+    try {
+      const profile = await icpService.getBenchmark();
+      if (!profile) {
+        return res.status(404).json({
+          success: false,
+          message: "No benchmark ICP set",
+        });
+      }
+      res.status(200).json({ success: true, data: profile });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // PUT /api/icp/:id/set-benchmark — mark ICP as company benchmark
+  setBenchmark: async (req, res, next) => {
+    try {
+      const profile = await icpService.setBenchmark(req.params.id);
+      res.status(200).json({
+        success: true,
+        message: "ICP set as benchmark successfully",
+        data: profile,
       });
     } catch (error) {
       next(error);

@@ -109,21 +109,31 @@ const icpValidation = [
   body("techCategoriesExclude")
     .optional()
     .isArray().withMessage("techCategoriesExclude must be an array"),
+
+  body("isBenchmark")
+    .optional()
+    .isBoolean().withMessage("isBenchmark must be a boolean"),
 ];
 
 // POST   /api/icp                        — create a new ICP profile
 // GET    /api/icp                        — list profiles (?isActive=true&page&limit)
+// GET    /api/icp/benchmark              — get company benchmark ICP
 // GET    /api/icp/:id                    — get single profile detail
 // PUT    /api/icp/:id                    — update an ICP profile
+// PUT    /api/icp/:id/set-benchmark      — set ICP as company benchmark
 // DELETE /api/icp/:id                    — delete an ICP profile
+// POST   /api/icp/:id/create-segment     — create segment from ICP matches
 // GET    /api/icp/:id/match-prospects    — match prospects by ICP criteria
 // GET    /api/icp/:id/match-persona      — find best POC by buyer persona
 
 router.post("/",                        icpValidation, icpController.create);
 router.get("/",                         icpController.getAll);
+router.get("/benchmark",                icpController.getBenchmark);
 router.get("/:id",                      icpController.getById);
 router.put("/:id",                      icpValidation, icpController.update);
+router.put("/:id/set-benchmark",        icpController.setBenchmark);
 router.delete("/:id",                   icpController.delete);
+router.post("/:id/create-segment",      icpController.createSegment);
 router.get("/:id/match-prospects",      icpController.matchProspects);
 router.get("/:id/match-persona",        icpController.matchBuyerPersona);
 
