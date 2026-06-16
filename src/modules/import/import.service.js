@@ -32,6 +32,7 @@ import {
   hasContactPayload,
   saveContactsForProspect,
 } from "../../common/utils/contactImportHelpers.js";
+import { calculateScore } from "../../common/utils/scoring.js";
 
 const CHUNK_SIZE = 1000;
 
@@ -270,6 +271,45 @@ const importService = {
       successCount  += inserted;
       if (inserted < chunk.length) insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
       await importLogRepository.update(importLog._id, { successCount });
+    }
+
+    // Post-import scoring — new rows only (duplicate-flagged rows are excluded)
+    if (successCount > 0) {
+      try {
+        const newProspects = await Prospect.find({ importLogId: importLog._id }).lean();
+        const scoringUpdates = [];
+
+        for (const prospect of newProspects) {
+          try {
+            const scoreResult = calculateScore(prospect);
+            scoringUpdates.push({
+              updateOne: {
+                filter: { _id: prospect._id },
+                update: {
+                  $set: {
+                    finalScore:    scoreResult.finalScore,
+                    clvRanking:    scoreResult.clvRanking,
+                    salesPriority: scoreResult.salesPriority,
+                    techFitScore:  scoreResult.techFitScore,
+                  },
+                },
+              },
+            });
+          } catch (scoreErr) {
+            console.warn(
+              `Post-import scoring skipped for ${prospect.accountName || prospect._id}:`,
+              scoreErr.message
+            );
+          }
+        }
+
+        if (scoringUpdates.length > 0) {
+          await Prospect.bulkWrite(scoringUpdates, { ordered: false });
+          console.log(`Post-import scoring: ${scoringUpdates.length} prospects scored`);
+        }
+      } catch (err) {
+        console.error("Post-import scoring error:", err.message);
+      }
     }
 
     // Fetch inserted prospects for contact linking

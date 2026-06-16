@@ -204,7 +204,7 @@ const dashboardService = {
       accountName:   p.accountName,
       industry:      p.primaryIndustry,
       score:         p.techFitScore,
-      scoreChange:   `+${Math.floor(Math.random() * 15) + 5}`,
+      scoreChange:   null,
       salesPriority: p.salesPriority,
     }));
   },

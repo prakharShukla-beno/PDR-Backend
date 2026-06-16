@@ -204,11 +204,26 @@ const segmentService = {
     const skip   = (page - 1) * limit;
     const pageIds = segment.matchedAccountIds.slice(skip, skip + limit);
 
-    // Fetch accounts — sorted by finalScore (post enrichment) then techFitScore
-    const accounts = await Prospect.find({ _id: { $in: pageIds } })
-      .select("accountName website primaryIndustry country techFitScore finalScore salesPriority clvRanking intentSignal noOfEmployees primaryTechStack")
-      .sort({ finalScore: -1, techFitScore: -1 })
+    // Always fetch LIVE scores from Prospect — never use cached snapshot values
+    const LIVE_ACCOUNT_FIELDS = [
+      "accountName", "website", "primaryIndustry", "country",
+      "noOfEmployees", "annualRevenue", "primaryTechStack",
+      "finalScore", "clvRanking", "salesPriority", "techFitScore",
+      "technologyAlignment", "intentSignal", "financialCapacity",
+      "strategicValue", "marginPotential",
+    ].join(" ");
+
+    const prospectRows = await Prospect.find({ _id: { $in: pageIds } })
+      .select(LIVE_ACCOUNT_FIELDS)
       .lean();
+
+    // Preserve segment pagination order while merging live prospect data
+    const byId = Object.fromEntries(
+      prospectRows.map((p) => [p._id.toString(), p])
+    );
+    const accounts = pageIds
+      .map((pid) => byId[pid.toString()])
+      .filter(Boolean);
 
     // Tier breakdown — Tier A/B/C counts
     const tierAgg = await Prospect.aggregate([

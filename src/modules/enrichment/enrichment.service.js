@@ -1,8 +1,25 @@
+import OpenAI from "openai";
 import enrichmentRepository  from "./enrichment.repository.js";
 import prospectRepository    from "../prospect/prospect.repository.js";
 import { calculateScore }    from "../../common/utils/scoring.js";
 import notificationService   from "../notification/notification.service.js";
 import auditLogService       from "../auditLog/auditLog.service.js";
+
+// ── AI provider detection — OpenAI takes priority when both keys exist ────────
+const AI_PROVIDER = process.env.OPENAI_API_KEY ? "openai" : "gemini";
+
+console.log(`AI Enrichment provider: ${AI_PROVIDER}`);
+
+if (!process.env.OPENAI_API_KEY && !process.env.GEMINI_API_KEY) {
+  console.warn(
+    "⚠️  WARNING: Neither OPENAI_API_KEY nor GEMINI_API_KEY is set. " +
+    "AI Enrichment will fail. Add at least one key to .env"
+  );
+}
+
+const openaiClient = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
 const EMPLOYEE_RANGES = [
   "1-10", "11-50", "51-200", "201-500", "501-1,000",
@@ -17,6 +34,9 @@ const REVENUE_BUCKETS = [
   "Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M",
   "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+",
 ];
+const TECH_ADOPTION_PROFILES = [
+  "Innovator", "Early Adopter", "Mainstream", "Laggard", "Leapfrog",
+];
 
 /** True when AI should still fill missing prospect fields */
 export const needsEnrichment = (prospect) => {
@@ -28,6 +48,7 @@ export const needsEnrichment = (prospect) => {
     !prospect.strategicValue ||
     !prospect.marginPotential ||
     !prospect.techAdoptionProfile ||
+    !prospect.technologyAlignment ||
     !prospect.primaryTechStack?.length
   );
 };
@@ -59,43 +80,278 @@ const pickEnum = (value, allowed) => {
   return allowed.find((v) => v.toLowerCase() === lower) || null;
 };
 
+// ── Scoring field normalization — AI must map to exact enum values ───────────
+const SCORING_FIELD_ALLOWED = {
+  financialCapacity:   ["Enterprise", "Mid-Market", "Small Business"],
+  strategicValue:      ["Market Maker", "VC Backed", "Standard"],
+  marginPotential:     ["High Margins", "Standard Margins", "Low Margins"],
+  technologyAlignment: ["Core Match", "Adjacent Match", "No Match"],
+};
+
+const SCORING_FIELD_DEFAULTS = {
+  financialCapacity:   "Small Business",
+  strategicValue:      "Standard",
+  marginPotential:     "Standard Margins",
+  technologyAlignment: "Adjacent Match",
+};
+
+const SCORING_FIELD_NORMALIZE = {
+  financialCapacity: {
+    enterprise: "Enterprise", large: "Enterprise",
+    "mid market": "Mid-Market", medium: "Mid-Market",
+    "mid-market": "Mid-Market", smb: "Small Business",
+    small: "Small Business", startup: "Small Business",
+  },
+  strategicValue: {
+    "market maker": "Market Maker", unicorn: "Market Maker",
+    "vc backed": "VC Backed", "vc-backed": "VC Backed",
+    funded: "VC Backed", standard: "Standard", none: "Standard",
+  },
+  marginPotential: {
+    high: "High Margins", "high margins": "High Margins",
+    standard: "Standard Margins", medium: "Standard Margins",
+    low: "Low Margins", "low margins": "Low Margins",
+  },
+  technologyAlignment: {
+    core: "Core Match", "core match": "Core Match",
+    adjacent: "Adjacent Match", partial: "Adjacent Match",
+    "no match": "No Match", none: "No Match", legacy: "No Match",
+  },
+};
+
+const normalizeEnrichmentField = (field, value) => {
+  if (!value) return SCORING_FIELD_DEFAULTS[field];
+  const allowed = SCORING_FIELD_ALLOWED[field];
+  const raw = String(value).trim();
+  if (allowed.includes(raw)) return raw;
+  const normalized = SCORING_FIELD_NORMALIZE[field]?.[raw.toLowerCase()];
+  if (normalized) return normalized;
+  console.warn(`Enrichment: unexpected ${field} value "${value}" → using default`);
+  return SCORING_FIELD_DEFAULTS[field];
+};
+
+const applyScoringFieldSuggestions = (prospect, suggestions, parsed, updateData) => {
+  const scoringFields = [
+    "financialCapacity",
+    "strategicValue",
+    "marginPotential",
+    "technologyAlignment",
+  ];
+
+  for (const field of scoringFields) {
+    if (prospect[field]) continue;
+    const raw = suggestions[field] ?? parsed[field];
+    updateData[field] = normalizeEnrichmentField(field, raw);
+  }
+};
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// ── Enrichment prompt — FR-5.1, FR-5.2, FR-5.3 ───────────────────────────────
+const parseAIJson = (raw) => {
+  const cleaned = String(raw)
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .replace(/```json|```/g, "")
+    .trim();
+  return JSON.parse(cleaned);
+};
+
+// ── Shared enrichment prompt — used by OpenAI and Gemini identically ──────────
 const buildEnrichmentPrompt = (prospect) => {
-  return `You are a B2B sales intelligence analyst. Analyze the following company data and return enriched insights.
+  const techStack = Array.isArray(prospect.primaryTechStack)
+    ? prospect.primaryTechStack.join(", ")
+    : (prospect.primaryTechStack || "unknown");
 
-Prospect Data:
-- Account Name: ${prospect.accountName}
-- Website: ${prospect.website || "N/A"}
-- Primary Industry: ${prospect.primaryIndustry || "N/A"}
-- Business Model: ${prospect.businessModel || "N/A"}
-- Country: ${prospect.country || "N/A"}
-- Annual Revenue: ${prospect.annualRevenue || "N/A"}
-- No. of Employees: ${prospect.noOfEmployees || "N/A"}
-- Current Tech Stack: ${prospect.primaryTechStack || "N/A"}
-- Tech Adoption Profile: ${prospect.techAdoptionProfile || "N/A"}
-- Infrastructure Risk: ${prospect.infrastructureRisk || "N/A"}
-- Intent Signal: ${prospect.intentSignal || "N/A"}
-- Sales Priority: ${prospect.salesPriority || "N/A"}
-- CLV Ranking: ${prospect.clvRanking || "N/A"}
+  return `You are a B2B sales intelligence analyst.
+Analyze this company and return enrichment data as valid JSON only.
+No markdown, no backticks, no explanation — pure JSON.
 
-Return ONLY a valid JSON object (no markdown, no explanation) with exactly these fields:
+Company: ${prospect.accountName}
+Website: ${prospect.website ?? "unknown"}
+Country: ${prospect.country ?? "unknown"}
+Industry: ${prospect.primaryIndustry ?? "unknown"}
+Business Model: ${prospect.businessModel ?? "unknown"}
+Employees: ${prospect.noOfEmployees ?? "unknown"}
+Revenue: ${prospect.annualRevenue ?? "unknown"}
+Tech Stack: ${techStack}
+Tech Adoption Profile: ${prospect.techAdoptionProfile ?? "unknown"}
+Infrastructure Risk: ${prospect.infrastructureRisk ?? "unknown"}
+Current Intent Signal: ${prospect.intentSignal ?? "unknown"}
+Sales Priority: ${prospect.salesPriority ?? "unknown"}
+CLV Ranking: ${prospect.clvRanking ?? "unknown"}
+
+Return ONLY this JSON structure with ALL fields populated (never omit a field):
+
 {
-"techStack": ["string array of specific tech tools this company likely uses — e.g. AWS, Salesforce, React, PostgreSQL, Docker, HubSpot. Be specific, not generic. Return 4-10 tools based on their industry, size, and business model."],  "intentSignals": ["string array of buyer intent indicators — e.g. hiring patterns, funding events, product launches"],
-  "buyerIntentSignal": "one of: Hyper-Growth Mode | Cost Containment | Risk Mitigation | Modernization Mandate | null",
-  "strategicCategory": "one of: High Value | Watch List | Not a Fit | null",
+  "financialCapacity": "Enterprise" | "Mid-Market" | "Small Business",
+  "strategicValue": "Market Maker" | "VC Backed" | "Standard",
+  "marginPotential": "High Margins" | "Standard Margins" | "Low Margins",
+  "technologyAlignment": "Core Match" | "Adjacent Match" | "No Match",
+  "primaryTechStack": ["array", "of", "4-10", "detected", "tools"],
+  "techStack": ["same as primaryTechStack — duplicate for compatibility"],
+  "intentSignals": ["array of 2-5 buyer intent indicators as short strings"],
+  "buyerIntentSignal": "one exact value from allowed list below",
+  "strategicCategory": "High Value" | "Watch List" | "Not a Fit",
   "icpMatch": true or false,
   "missingFieldSuggestions": {
-    "primaryIndustry": "suggested value or null",
-    "annualRevenue": "suggested value or null",
-    "noOfEmployees": "suggested value or null",
-    "techAdoptionProfile": "one of: Innovator | Early Adopter | Mainstream | Laggard | Leapfrog | null",
-    "financialCapacity": "one of: Enterprise | Mid-Market | Small Business | null",
-    "marginPotential": "one of: High Margins | Standard Margins | Low Margins | null",
-    "strategicValue": "one of: Market Maker | VC Backed | Standard | null"
+    "primaryIndustry": "suggested industry string",
+    "annualRevenue": "one exact revenue bucket",
+    "noOfEmployees": "one exact employee range",
+    "techAdoptionProfile": "one exact adoption profile",
+    "financialCapacity": "Enterprise | Mid-Market | Small Business",
+    "strategicValue": "Market Maker | VC Backed | Standard",
+    "marginPotential": "High Margins | Standard Margins | Low Margins",
+    "technologyAlignment": "Core Match | Adjacent Match | No Match"
   }
-}`;
+}
+
+SCORING FIELD RULES (use exact strings — never return null for these 4):
+
+"financialCapacity":
+  Enterprise     = revenue > $200M OR employees > 1000
+  Mid-Market     = revenue $50M–$200M OR employees 201–1000
+  Small Business = revenue < $50M OR employees < 201
+  Default: "Small Business"
+
+"strategicValue":
+  Market Maker = household name brand OR unicorn (valuation > $1B)
+  VC Backed    = raised Series B+ funding recently
+  Standard     = no significant brand equity or recent funding
+  Default: "Standard"
+
+"marginPotential":
+  High Margins     = BFSI, SaaS, Healthcare, Legal, Pharma, Fintech
+  Standard Margins = IT Services, Manufacturing, Professional Services, Energy, Education
+  Low Margins      = Retail, Logistics, E-commerce, Construction, Government, Hospitality
+  Default: "Standard Margins"
+
+"technologyAlignment":
+  Core Match     = React, Node.js, Python, AWS, Azure, GCP, Salesforce, Docker, Kubernetes, PostgreSQL, MongoDB, or similar modern cloud/web stack
+  Adjacent Match = PHP, HubSpot, Shopify, partial cloud adoption, or unknown stack
+  No Match       = Mainframe, COBOL, SAP On-Premise, Oracle legacy, competitor proprietary systems
+  Default: "Adjacent Match" if uncertain
+
+ALLOWED VALUES FOR OTHER FIELDS:
+
+"buyerIntentSignal" — exactly one of:
+  ${INTENT_SIGNALS.map((s) => `"${s}"`).join(" | ")}
+
+"annualRevenue" / missingFieldSuggestions.annualRevenue — exactly one of:
+  ${REVENUE_BUCKETS.map((s) => `"${s}"`).join(" | ")}
+
+"noOfEmployees" / missingFieldSuggestions.noOfEmployees — exactly one of:
+  ${EMPLOYEE_RANGES.map((s) => `"${s}"`).join(" | ")}
+
+"techAdoptionProfile" / missingFieldSuggestions.techAdoptionProfile — exactly one of:
+  ${TECH_ADOPTION_PROFILES.map((s) => `"${s}"`).join(" | ")}
+
+"primaryTechStack" / "techStack":
+  Array of 4–10 specific tools (e.g. ["AWS", "Salesforce", "React", "PostgreSQL", "Docker"])
+  Use empty array [] only if truly unknown.
+
+"intentSignals":
+  Array of 2–5 short strings describing buying signals (hiring, funding, expansion, etc.)
+
+"strategicCategory":
+  High Value = strong fit for enterprise B2B sales
+  Watch List = potential but needs nurturing
+  Not a Fit = poor fit for typical ICP
+
+"icpMatch":
+  true if company matches a typical B2B SaaS/IT services ICP (51–5000 employees, modern tech, growth market)
+  false otherwise
+
+CRITICAL RULES:
+- Never return null for financialCapacity, strategicValue, marginPotential, or technologyAlignment.
+- Populate every key in missingFieldSuggestions with your best estimate.
+- primaryTechStack must be an array (use [] only if completely unknown).
+- Return valid JSON only — no markdown fences, no commentary.`;
+};
+
+// ── OpenAI enrichment call ────────────────────────────────────────────────────
+const enrichWithOpenAI = async (prospect) => {
+  if (!openaiClient) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
+  const prompt = buildEnrichmentPrompt(prospect);
+
+  const response = await openaiClient.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: "You are a B2B sales intelligence analyst. Return only valid JSON.",
+      },
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+    temperature: 0.1,
+    max_tokens: 1500,
+    response_format: { type: "json_object" },
+  });
+
+  const raw = response.choices[0]?.message?.content ?? "{}";
+  return parseAIJson(raw);
+};
+
+// ── Gemini enrichment call (existing REST API) ────────────────────────────────
+const enrichWithGemini = async (prospect) => {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY is not configured");
+  }
+
+  const prompt = buildEnrichmentPrompt(prospect);
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+  const response = await fetch(geminiUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+    }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => ({}));
+    console.error("Gemini full error:", JSON.stringify(errBody, null, 2));
+    throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+  }
+
+  const data    = await response.json();
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!content) throw new Error("Empty response from Gemini");
+
+  console.log("Gemini raw response:", content.slice(0, 200));
+  return parseAIJson(content);
+};
+
+// ── Unified enrichment caller with cross-provider fallback ─────────────────────
+const callAIEnrichment = async (prospect) => {
+  try {
+    if (AI_PROVIDER === "openai") {
+      console.log(`Enriching ${prospect.accountName} via OpenAI...`);
+      return await enrichWithOpenAI(prospect);
+    }
+    console.log(`Enriching ${prospect.accountName} via Gemini...`);
+    return await enrichWithGemini(prospect);
+  } catch (primaryError) {
+    console.error(`Primary provider (${AI_PROVIDER}) failed:`, primaryError.message);
+
+    if (AI_PROVIDER === "openai" && process.env.GEMINI_API_KEY) {
+      console.log("Falling back to Gemini...");
+      return await enrichWithGemini(prospect);
+    }
+    if (AI_PROVIDER === "gemini" && process.env.OPENAI_API_KEY) {
+      console.log("Falling back to OpenAI...");
+      return await enrichWithOpenAI(prospect);
+    }
+
+    throw primaryError;
+  }
 };
 
 // ── Single prospect enrich ────────────────────────────────────────────────────
@@ -107,99 +363,55 @@ const enrichSingleProspect = async (prospectId, userId) => {
     throw error;
   }
 
-  // ── Gemini API call ───────────────────────────────────────────────────────
-  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
-
-  console.log("Gemini URL:", geminiUrl.replace(process.env.GEMINI_API_KEY, "***"));
-
-  const response = await fetch(geminiUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: buildEnrichmentPrompt(prospect) }] }],
-    }),
-  });
-
-  if (!response.ok) {
-    const errBody = await response.json();
-    console.error("Gemini full error:", JSON.stringify(errBody, null, 2));
-    const error = new Error(`Gemini API error: ${response.statusText}`);
-    error.statusCode = 502;
-    throw error;
-  }
-
-  const data    = await response.json();
-  const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!content) throw new Error("Empty response from Gemini");
-
-  console.log("Gemini raw response:", content.slice(0, 200));
-
-  let parsed;
-  try {
-    const cleaned = content.replace(/```json|```/g, "").trim();
-    parsed = JSON.parse(cleaned);
-  } catch {
-    throw new Error("Could not parse Gemini response as JSON");
-  }
+  const parsed = await callAIEnrichment(prospect);
 
   const updateData = {};
   const suggestions = parsed.missingFieldSuggestions || {};
 
-  if (!prospect.primaryIndustry    && suggestions.primaryIndustry)
-    updateData.primaryIndustry     = suggestions.primaryIndustry;
-  if (!prospect.annualRevenue       && suggestions.annualRevenue) {
-    const revenue = pickEnum(suggestions.annualRevenue, REVENUE_BUCKETS);
+  if (!prospect.primaryIndustry && suggestions.primaryIndustry)
+    updateData.primaryIndustry = suggestions.primaryIndustry;
+
+  const revenueRaw = suggestions.annualRevenue ?? parsed.annualRevenue;
+  if (!prospect.annualRevenue && revenueRaw) {
+    const revenue = pickEnum(revenueRaw, REVENUE_BUCKETS);
     if (revenue) updateData.annualRevenue = revenue;
   }
-  if (!prospect.noOfEmployees       && suggestions.noOfEmployees) {
-    const employees = normalizeEmployeeRange(suggestions.noOfEmployees);
+
+  const employeesRaw = suggestions.noOfEmployees ?? parsed.noOfEmployees;
+  if (!prospect.noOfEmployees && employeesRaw) {
+    const employees = normalizeEmployeeRange(employeesRaw);
     if (employees) updateData.noOfEmployees = employees;
   }
-  if (!prospect.techAdoptionProfile && suggestions.techAdoptionProfile)
-    updateData.techAdoptionProfile = suggestions.techAdoptionProfile;
-  if (!prospect.financialCapacity   && suggestions.financialCapacity)
-    updateData.financialCapacity   = suggestions.financialCapacity;
-  if (!prospect.marginPotential     && suggestions.marginPotential)
-    updateData.marginPotential     = suggestions.marginPotential;
-  if (!prospect.strategicValue      && suggestions.strategicValue)
-    updateData.strategicValue      = suggestions.strategicValue;
 
-  // ── FR-5.3: Update buyer intent signal if available ───────────────────────
-  if (parsed.buyerIntentSignal && !prospect.intentSignal) {
-    const intent = pickEnum(parsed.buyerIntentSignal, INTENT_SIGNALS);
+  if (!prospect.techAdoptionProfile && suggestions.techAdoptionProfile) {
+    const profile = pickEnum(suggestions.techAdoptionProfile, TECH_ADOPTION_PROFILES);
+    if (profile) updateData.techAdoptionProfile = profile;
+  }
+
+  applyScoringFieldSuggestions(prospect, suggestions, parsed, updateData);
+
+  const intentRaw = parsed.buyerIntentSignal ?? parsed.intentSignal;
+  if (intentRaw && !prospect.intentSignal) {
+    const intent = pickEnum(intentRaw, INTENT_SIGNALS);
     if (intent) updateData.intentSignal = intent;
   }
 
-  // Task 5 fix: AI detected techStack → save to prospect.primaryTechStack
-  // Only update if prospect.primaryTechStack is empty/null
-  // parsed.techStack is the array Gemini returned e.g. ["AWS", "React", "MongoDB"]
+  const detectedStack = parsed.primaryTechStack ?? parsed.techStack;
   if (
-    parsed.techStack &&
-    parsed.techStack.length > 0 &&
+    Array.isArray(detectedStack) &&
+    detectedStack.length > 0 &&
     (!prospect.primaryTechStack || prospect.primaryTechStack.length === 0)
   ) {
-    updateData.primaryTechStack = parsed.techStack;
+    updateData.primaryTechStack = detectedStack;
   }
 
-  // Save AI-filled fields to DB first
   if (Object.keys(updateData).length > 0) {
     await prospectRepository.updateSkipValidation(prospectId, updateData);
   }
 
-  // ── SCORING HOOK: Run formula after AI fills the fields ───────────────────
-  // Now that AI has filled financialCapacity, strategicValue, marginPotential,
-  // techAdoptionProfile etc., we can run the scoring formula.
-  //
-  // This is how "WITH AI" scoring works:
-  //   1. AI fills the input fields
-  //   2. We run calculateScore() on the updated prospect
-  //   3. techFitScore, finalScore, clvRanking, salesPriority are saved
-  //
-  // Get the updated prospect (with AI-filled fields merged in)
   const updatedProspect = { ...prospect.toObject(), ...updateData };
   const scoreResult     = calculateScore(updatedProspect);
 
-  // Save scoring outputs to DB
   await prospectRepository.updateSkipValidation(prospectId, {
     techFitScore:  scoreResult.techFitScore,
     finalScore:    scoreResult.finalScore,
@@ -207,21 +419,25 @@ const enrichSingleProspect = async (prospectId, userId) => {
     salesPriority: scoreResult.salesPriority,
   });
 
-  // ── Save enrichment record ────────────────────────────────────────────────
+  console.log(`Enrichment complete for ${updatedProspect.accountName}:
+  financialCapacity:   ${updatedProspect.financialCapacity}
+  strategicValue:      ${updatedProspect.strategicValue}
+  marginPotential:     ${updatedProspect.marginPotential}
+  technologyAlignment: ${updatedProspect.technologyAlignment}
+  → finalScore: ${scoreResult.finalScore} (${scoreResult.clvRanking})`);
+
   const enrichment = await enrichmentRepository.upsertByProspectId(prospectId, {
     prospectId,
     enrichedBy:       "ai_module",
     enrichedAt:        new Date(),
-    techStack:         parsed.techStack         || [],
-    intentSignals:     parsed.intentSignals     || [],
+    techStack:         detectedStack || parsed.techStack || [],
+    intentSignals:     parsed.intentSignals || [],
     strategicCategory: parsed.strategicCategory || null,
-    icpMatch:          parsed.icpMatch          ?? false,
-    // Store the calculated score in enrichment record too (for history)
-    priorityScore:     scoreResult.finalScore   || 0,
+    icpMatch:          parsed.icpMatch ?? false,
+    priorityScore:     scoreResult.finalScore || 0,
     rawResponse:       parsed,
   });
 
-  // ── FR-4.3: Audit log ─────────────────────────────────────────────────────
   await auditLogService.log({
     userId,
     action:      "UPDATE",
@@ -229,6 +445,7 @@ const enrichSingleProspect = async (prospectId, userId) => {
     entityId:    prospectId,
     description: `AI enrichment + scoring completed for "${prospect.accountName}"`,
     metadata: {
+      aiProvider:     AI_PROVIDER,
       fieldsUpdated:  Object.keys(updateData),
       intentSignals:  parsed.intentSignals || [],
       finalScore:     scoreResult.finalScore,
@@ -250,7 +467,7 @@ const enrichmentService = {
     return await enrichSingleProspect(prospectId, userId);
   },
 
-  /** Gemini call with one retry — helps segment bulk runs under rate limits */
+  /** AI call with one retry — helps segment bulk runs under rate limits */
   enrichSingleWithRetry: async (prospectId, userId, retries = 1) => {
     let lastError;
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -264,7 +481,6 @@ const enrichmentService = {
     throw lastError;
   },
 
-  // Bulk enrichment — runs in background
   enrichBulk: async (prospectIds, userId) => {
     const results = { success: 0, failed: 0, errors: [] };
 
