@@ -1,6 +1,7 @@
 import segmentRepository    from "./segment.repository.js";
 import Prospect             from "../prospect/prospect.model.js";
 import ICP                  from "../icp/icp.model.js";
+import { buildProspectMatchFilter } from "../icp/icp.service.js";
 import enrichmentService, { needsEnrichment } from "../enrichment/enrichment.service.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
 
@@ -127,7 +128,9 @@ const segmentService = {
       icpProfile = await ICP.findById(data.icpId).lean();
     }
 
-    const query     = segmentService.buildQuery(data.filters || {}, icpProfile);
+    const query = icpProfile
+      ? buildProspectMatchFilter(icpProfile)
+      : segmentService.buildQuery(data.filters || {}, null);
     const prospects = await Prospect.find(query).select("_id").lean();
     const ids       = prospects.map(p => p._id);
     await segmentRepository.saveSnapshot(segment._id, ids);
@@ -156,7 +159,9 @@ const segmentService = {
         icpProfile = await ICP.findById(segment.icpId).lean();
       }
 
-      const query     = segmentService.buildQuery(data.filters, icpProfile);
+      const query = icpProfile
+        ? buildProspectMatchFilter(icpProfile)
+        : segmentService.buildQuery(data.filters, icpProfile);
       const prospects = await Prospect.find(query).select("_id").lean();
       const ids       = prospects.map(p => p._id);
       await segmentRepository.saveSnapshot(id, ids);
@@ -180,7 +185,9 @@ const segmentService = {
       icpProfile = await ICP.findById(segment.icpId).lean();
     }
 
-    const query     = segmentService.buildQuery(segment.filters, icpProfile);
+    const query = icpProfile
+      ? buildProspectMatchFilter(icpProfile)
+      : segmentService.buildQuery(segment.filters, icpProfile);
     const prospects = await Prospect.find(query).select("_id").lean();
     const ids       = prospects.map(p => p._id);
     await segmentRepository.saveSnapshot(id, ids);
@@ -446,7 +453,9 @@ const segmentService = {
         });
 
         // Snapshot re-sync karo scored data ke saath
-        const query     = segmentService.buildQuery(segment.filters, icpProfile);
+        const query = icpProfile
+          ? buildProspectMatchFilter(icpProfile)
+          : segmentService.buildQuery(segment.filters, icpProfile);
         const prospects = await Prospect.find(query).select("_id").lean();
         await segmentRepository.saveSnapshot(segmentId, prospects.map(p => p._id));
 
