@@ -3,6 +3,10 @@ import prospectRepository from "../prospect/prospect.repository.js";
 import contactRepository from "../contacts/contact.repository.js";
 import Contact from "../contacts/contact.model.js";
 import auditLogService from "../auditLog/auditLog.service.js";
+import {
+  saveContactsForProspect,
+} from "../../common/utils/contactImportHelpers.js";
+import { normEmail } from "../../common/utils/contactDedup.js";
 
 const duplicateService = {
 
@@ -85,12 +89,21 @@ const duplicateService = {
     } else {
       // Save as new prospect (account)
       const { contacts, ...prospectData } = duplicate.newData;
-      await prospectRepository.create({
+      const created = await prospectRepository.create({
         ...prospectData,
         isDuplicate: true,
         source:      "excel",
         importLogId: duplicate.importLogId,
       });
+
+      if (contacts?.length) {
+        await saveContactsForProspect(
+          Contact,
+          { contacts, accountName: created.accountName },
+          created,
+          duplicate.importLogId
+        );
+      }
     }
 
     const updated = await duplicateRepository.update(id, {
@@ -152,7 +165,7 @@ const duplicateService = {
 
       if (duplicate.newData) {
         const contactMergeFields = [
-          "standardizedRoles", "functionalDomain", "keyFocusAreas",
+          "standardizedRoles", "functionalDomain", "keyFocusAreas", "seniority",
           "primaryPhone", "secondaryPhone", "primaryMobNo",
           "linkedIn", "twitterUrl", "country", "state", "city", "timeZone",
           "accountId", "accountName", "accountIndustry", "accountCountry",
@@ -208,15 +221,33 @@ const duplicateService = {
       if (Object.keys(updateData).length > 0) {
         await prospectRepository.update(winner._id, updateData);
       }
+
+      if (duplicate.newData.contacts?.length) {
+        await saveContactsForProspect(
+          Contact,
+          duplicate.newData,
+          winner,
+          duplicate.importLogId
+        );
+      }
     }
 
     // Manual duplicate — merge loser into winner
     if (duplicate.prospectId2) {
       const loser = await prospectRepository.findById(duplicate.prospectId2._id || duplicate.prospectId2);
       if (loser) {
-        await contactRepository.updateMany(
-          { accountId: loser._id },
-          {
+        const winnerEmails = new Set(
+          (await Contact.find({ accountId: winner._id }).select("email").lean())
+            .map((c) => normEmail(c.email))
+            .filter(Boolean)
+        );
+
+        const loserContacts = await Contact.find({ accountId: loser._id }).lean();
+        for (const contact of loserContacts) {
+          const email = normEmail(contact.email);
+          if (email && winnerEmails.has(email)) continue;
+
+          await Contact.findByIdAndUpdate(contact._id, {
             $set: {
               accountId:   winner._id,
               accountName: winner.accountName,
@@ -228,8 +259,8 @@ const duplicateService = {
               accountSalesPriority: winner.salesPriority    || null,
               accountClvRanking:    winner.clvRanking       || null,
             },
-          }
-        );
+          });
+        }
         if (loser.campaignIds?.length > 0) {
           await prospectRepository.update(winner._id, {
             $addToSet: { campaignIds: { $each: loser.campaignIds } },

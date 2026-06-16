@@ -92,6 +92,7 @@ const contactSchema = new mongoose.Schema(
     },
     keyFocusAreas:     { type: String, trim: true, default: null },
     standardizedRoles: { type: String, trim: true, default: null },
+    seniority:         { type: String, trim: true, default: null },
 
     // ── Contact Info ─────────────────────────────────────────────────────────
     email:                   { type: String, trim: true, lowercase: true, default: null },
