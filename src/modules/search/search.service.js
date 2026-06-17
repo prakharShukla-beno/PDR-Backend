@@ -1,5 +1,6 @@
 import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
+import { expandSectors } from "../../common/utils/industryMapper.js";
 
 // ─── Helper: Build Include/Exclude filter ──────────────────────────────────
 // inc = ["Healthcare", "SaaS"]  → $in
@@ -84,7 +85,8 @@ const searchService = {
       if (f) filter[field] = f;
     };
 
-    applyFilter("primaryIndustry",     industryInclude,          industryExclude);
+    // Expand sector name → all mapped industry values before querying DB
+    applyFilter("primaryIndustry", expandSectors(industryInclude), expandSectors(industryExclude));
     applyFilter("country",             countryInclude,           countryExclude);
     applyFilter("hqLocationCity",      cityInclude,              cityExclude);
     applyFilter("businessModel",       businessModelInclude,     businessModelExclude);
@@ -208,7 +210,8 @@ const searchService = {
     applyFilter("city",             cityInclude,             cityExclude);
 
     // ── Account level filters (denormalized) ─────────────────────────────────
-    applyFilter("accountIndustry",      accountIndustryInclude,      accountIndustryExclude);
+    // Expand sector name → all mapped industry values before querying DB
+    applyFilter("accountIndustry", expandSectors(accountIndustryInclude), expandSectors(accountIndustryExclude));
     applyFilter("accountCountry",       accountCountryInclude,       accountCountryExclude);
     applyFilter("accountCity",          accountCityInclude,          accountCityExclude);
     applyFilter("accountEmployees",     accountEmployeesInclude,     accountEmployeesExclude);

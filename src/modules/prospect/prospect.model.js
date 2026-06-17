@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { INDUSTRIES } from "../../common/constants/taxonomy.js";
+import { normalizeIndustryValue, getSectorForIndustry } from "../../common/utils/industryMapper.js";
 
 const prospectSchema = new mongoose.Schema(
   {
@@ -22,7 +22,6 @@ const prospectSchema = new mongoose.Schema(
     },
     primaryIndustry: {
       type: String,
-      enum: [...INDUSTRIES, null],
       default: null,
     },
     commercialCategory: {
@@ -185,10 +184,19 @@ const prospectSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// ─── Pre-save: accountNameLower auto-set ──────────────────────────────────────
+// ─── Pre-save: accountNameLower auto-set + industry validation ────────────────
 prospectSchema.pre("save", function () {
   if (this.accountName) {
     this.accountNameLower = this.accountName.toLowerCase().trim();
+  }
+  
+  // FIX: Normalize industry value to preserve exact format
+  // Prevents "Fintech" or "Banking" from being converted to "BFSI"
+  if (this.primaryIndustry) {
+    const normalized = normalizeIndustryValue(this.primaryIndustry);
+    if (normalized) {
+      this.primaryIndustry = normalized;
+    }
   }
 });
 
@@ -197,9 +205,18 @@ prospectSchema.pre("insertMany", function (next, docs) {
     if (typeof next === "function") next();
     return;
   }
+  
   docs.forEach((doc) => {
     if (doc.accountName) {
       doc.accountNameLower = doc.accountName.toLowerCase().trim();
+    }
+    
+    // FIX: Normalize industry values during bulk insert
+    if (doc.primaryIndustry) {
+      const normalized = normalizeIndustryValue(doc.primaryIndustry);
+      if (normalized) {
+        doc.primaryIndustry = normalized;
+      }
     }
   });
   if (typeof next === "function") next();

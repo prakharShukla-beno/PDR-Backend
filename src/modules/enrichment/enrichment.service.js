@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import enrichmentRepository  from "./enrichment.repository.js";
 import prospectRepository    from "../prospect/prospect.repository.js";
 import { calculateScore }    from "../../common/utils/scoring.js";
+import { normalizeIndustryValue } from "../../common/utils/industryMapper.js";
 import notificationService   from "../notification/notification.service.js";
 import auditLogService       from "../auditLog/auditLog.service.js";
 

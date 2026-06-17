@@ -1,5 +1,6 @@
 import pkg from "xlsx";
 import { INDUSTRIES } from "../constants/taxonomy.js";
+import { normalizeIndustryValue } from "./industryMapper.js";
 
 const { readFile, utils } = pkg;
 
@@ -160,8 +161,6 @@ const SENIORITY_HEADER_ALIASES = [
 // Client-specific fields (tech1/2/3, phone1/2, job1/2) are free text
 const ENUM_FIELDS = {
   accountSource:       ["LinkedIn", "Google", "Social Media", "Referral", "Event", "Cold Outreach"],
-  // Official taxonomy — invalid values are nulled, never row-rejected
-  primaryIndustry:     [...INDUSTRIES],
   commercialCategory:  ["Product Led", "SaaS-Subscriptions", "Professional Services", "Retail-E-Com"],
   businessModel:       ["B2B", "B2C", "D2C", "E-Commerce", "B2B2C", "Marketplace"],
   annualRevenue:       ["Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M", "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+"],
@@ -186,21 +185,6 @@ const ENUM_FIELDS = {
   // NOTE: primaryTechStack enum removed — client file uses free text for tech stack
 };
 
-// Partial / fuzzy industry aliases before falling back to null
-const INDUSTRY_ALIAS_RULES = [
-  { patterns: ["fintech", "fin tech", "banking", "finance", "bfsi", "insurance"], value: "BFSI" },
-  { patterns: ["software", "it & ites", "information technology", "saas", "tech"], value: "IT & ITES" },
-  { patterns: ["health", "pharma", "life science", "medical", "healthcare"], value: "Healthcare & Life Sciences" },
-  { patterns: ["retail", "cpg", "hospitality", "consumer"], value: "Retail, CPG & Hospitality" },
-  { patterns: ["manufacturing", "automotive", "auto"], value: "Manufacturing & Automotive" },
-  { patterns: ["logistics", "transport", "travel"], value: "Travel, Transport & Logistics" },
-  { patterns: ["energy", "utilities", "resources", "oil", "gas"], value: "Energy, Resources & Utilities" },
-  { patterns: ["real estate", "construction", "property"], value: "Real Estate & Construction" },
-  { patterns: ["government", "public sector", "education", "gov"], value: "Public Sector, Gov & Education" },
-  { patterns: ["consulting", "professional services", "legal", "accounting"], value: "Professional Services" },
-  { patterns: ["media", "telecom", "telecommunications"], value: "Media & Telecom" },
-];
-
 const normalizeEnumToken = (value) =>
   String(value)
     .replace(/\u00a0/g, " ")
@@ -211,28 +195,12 @@ const normalizeEnumToken = (value) =>
 const normalizeIndustryKey = (value) =>
   normalizeEnumToken(value).toLowerCase().replace(/[^a-z0-9&\s]/g, " ").replace(/\s+/g, " ").trim();
 
-const resolvePrimaryIndustry = (value, allowedValues = INDUSTRIES) => {
-  const trimmed = normalizeEnumToken(value);
-  if (allowedValues.includes(trimmed)) return trimmed;
-
-  const lower = normalizeIndustryKey(trimmed);
-
-  const caseInsensitive = allowedValues.find((v) => v.toLowerCase() === lower);
-  if (caseInsensitive) return caseInsensitive;
-
-  for (const { patterns, value: target } of INDUSTRY_ALIAS_RULES) {
-    if (patterns.some((p) => lower.includes(p) || p.includes(lower))) {
-      if (allowedValues.includes(target)) return target;
-    }
-  }
-
-  const partial = allowedValues.find((ind) => {
-    const indLower = ind.toLowerCase();
-    return indLower.includes(lower) || lower.includes(indLower.split(/[,&]/)[0].trim());
-  });
-  if (partial) return partial;
-
-  return null;
+// Save industry value as-is from Excel — no conversion to sector name.
+// FIX: Use normalizeIndustryValue() to preserve exact format
+// e.g., "Fintech", "Banking" will NOT be converted to "BFSI"
+const resolvePrimaryIndustry = (value) => {
+  if (!value) return null;
+  return normalizeIndustryValue(value);
 };
 
 const setFieldValue = (row, field, value) => {
@@ -473,6 +441,16 @@ const mapRowToSchema = (rawRow) => {
 /** Re-run enum normalization before DB insert (shared with import service) */
 export const sanitizeProspectRow = (row) => {
   const copy = { ...row };
+  
+  // FIX: Normalize industry value to preserve exact format
+  // Prevents "Fintech" or "Banking" from being converted to "BFSI"
+  if (copy.primaryIndustry) {
+    const normalized = normalizeIndustryValue(copy.primaryIndustry);
+    if (normalized) {
+      copy.primaryIndustry = normalized;
+    }
+  }
+  
   for (const [field, allowedValues] of Object.entries(ENUM_FIELDS)) {
     if (!Array.isArray(allowedValues)) continue;
     const value = getFieldValue(copy, field);
