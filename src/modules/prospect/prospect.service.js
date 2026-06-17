@@ -3,7 +3,6 @@ import duplicateRepository from "../duplicate/duplicate.repository.js";
 import Contact from "../contacts/contact.model.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
 import pkg from "xlsx";
-import Contact from "../contacts/contact.model.js";
 const { utils, write } = pkg;
 
 /** Map `industry` or `primaryIndustry` query param to a MongoDB primaryIndustry filter */
