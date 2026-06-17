@@ -1,6 +1,7 @@
 import enrichmentRepository  from "./enrichment.repository.js";
 import prospectRepository    from "../prospect/prospect.repository.js";
 import { calculateScore }    from "../../common/utils/scoring.js";
+import { normalizeIndustryValue } from "../../common/utils/industryMapper.js";
 import notificationService   from "../notification/notification.service.js";
 import auditLogService       from "../auditLog/auditLog.service.js";
 
@@ -139,8 +140,12 @@ const enrichSingleProspect = async (prospectId, userId) => {
   const updateData = {};
   const suggestions = parsed.missingFieldSuggestions || {};
 
-  if (!prospect.primaryIndustry    && suggestions.primaryIndustry)
-    updateData.primaryIndustry     = suggestions.primaryIndustry;
+  // FIX: Normalize industry suggestion to prevent sector conversion
+  // e.g., if AI suggests "BFSI", normalize to preserve exact format
+  if (!prospect.primaryIndustry && suggestions.primaryIndustry) {
+    const normalized = normalizeIndustryValue(suggestions.primaryIndustry);
+    if (normalized) updateData.primaryIndustry = normalized;
+  }
   if (!prospect.annualRevenue       && suggestions.annualRevenue) {
     const revenue = pickEnum(suggestions.annualRevenue, REVENUE_BUCKETS);
     if (revenue) updateData.annualRevenue = revenue;
