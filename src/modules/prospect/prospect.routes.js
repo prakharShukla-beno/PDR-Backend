@@ -42,4 +42,9 @@ router.get("/:id/score-breakdown",  prospectController.getScoreBreakdown);
 // Body: { clvRanking, salesPriority, overrideReason }
 router.put("/:id/override-tier",    prospectController.overrideTier);
 
+// AI suggest best POC for this prospect
+// Scenario 1: contacts exist → suggest best match from existing contacts
+// Scenario 2: no contacts   → suggest target role to search on LinkedIn
+router.post("/:id/suggest-poc",     prospectController.suggestPoc);
+
 export default router;

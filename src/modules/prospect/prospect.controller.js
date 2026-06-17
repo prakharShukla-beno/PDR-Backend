@@ -148,6 +148,16 @@ const prospectController = {
       });
     } catch (error) { next(error); }
   },
+  // ── POST /api/prospects/:id/suggest-poc ──────────────────────────────────
+  // Calls Gemini to suggest best POC for this account
+  // Returns recommended contact (if exists) or target role (if no contacts)
+  suggestPoc: async (req, res, next) => {
+    try {
+      const result = await prospectService.suggestPoc(req.params.id);
+      res.status(200).json({ success: true, data: result });
+    } catch (error) { next(error); }
+  },
+
 };
 
 export default prospectController;
