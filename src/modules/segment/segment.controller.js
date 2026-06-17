@@ -63,6 +63,7 @@ const segmentController = {
       const result = await segmentService.getStoredAccounts(
         req.params.id, Number(page), Number(limit)
       );
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate");
       res.status(200).json({ success: true, data: result });
     } catch (error) { next(error); }
   },

@@ -13,7 +13,6 @@ const FIELD_MAP = {
   "company name":          "accountName",
   "business name":         "accountName",
   "account":               "accountName",
-  "name":                  "accountName",
   "firm":                  "accountName",
   "client":                "accountName",
   "customer":              "accountName",
@@ -111,8 +110,52 @@ const FIELD_MAP = {
   "phone 2":               "contact.phone2",     // client format
   "phone2":                "contact.phone2",
   "job1":                  "contact.job1",       // client format
-  "job2":                  "contact.job2",       // client format
+  "job2":                  "contact.job2",       // client format — designation fallback
 };
+
+// LinkedIn-standard employee ranges (aligned with icp.model.js + prospect.model.js)
+export const EMPLOYEE_RANGES = [
+  "1-10", "11-50", "51-200", "201-500", "501-1,000",
+  "1,001-5,000", "5,001-10,000", "10,000+",
+];
+
+const EMPLOYEE_RANGE_NORMALIZE = {
+  "1-50":           "11-50",
+  "1 - 50":         "11-50",
+  "201-1,000":      "201-500",
+  "201-1000":       "201-500",
+  "501-1000":       "501-1,000",
+  "1001-5000":      "1,001-5,000",
+  "1,001-5000":     "1,001-5,000",
+  "5001-10000":     "5,001-10,000",
+  "5,000+":         "5,001-10,000",
+  "5000+":          "5,001-10,000",
+  "10000+":         "10,000+",
+  "10,000 +":       "10,000+",
+};
+
+const ACCOUNT_NAME_HEADER_ALIASES = [
+  "account name", "account name *", "accountname", "company", "company name",
+  "business name", "organization name", "organization", "organisation", "org",
+  "firm", "client", "customer", "vendor", "account",
+];
+
+const CONTACT_NAME_HEADER_ALIASES = [
+  "contact name", "contactname", "poc name", "full name", "person name", "name",
+];
+
+const DESIGNATION_HEADER_ALIASES = [
+  "designation", "title", "job title", "buyer persona", "contact title",
+  "position", "job role", "role", "persona", "job title 1", "job1",
+];
+
+const DEPARTMENT_HEADER_ALIASES = [
+  "department", "functional domain", "function", "dept",
+];
+
+const SENIORITY_HEADER_ALIASES = [
+  "seniority", "seniority level", "level",
+];
 
 // ── Enum validation — only for Beno format fields
 // Client-specific fields (tech1/2/3, phone1/2, job1/2) are free text
@@ -121,7 +164,7 @@ const ENUM_FIELDS = {
   commercialCategory:  ["Product Led", "SaaS-Subscriptions", "Professional Services", "Retail-E-Com"],
   businessModel:       ["B2B", "B2C", "D2C", "E-Commerce", "B2B2C", "Marketplace"],
   annualRevenue:       ["Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M", "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+"],
-  noOfEmployees:       ["1-50", "51-200", "201-1,000", "1,001-5,000", "5,000+"],
+  noOfEmployees:       EMPLOYEE_RANGES,
   techAdoptionProfile: ["Innovator", "Early Adopter", "Mainstream", "Laggard", "Leapfrog"],
   infrastructureRisk:  ["EOL", "Data Silos", "Security Gaps", "Scalability Lock", "Shadow IT"],
   financialCapacity:   ["Enterprise", "Mid-Market", "Small Business"],
@@ -191,23 +234,70 @@ const normalizeHeader = (header) =>
     .trim()
     .replace(/\s+/g, " ");
 
+/** Pick first non-empty cell whose header exactly matches an alias (priority order) */
+const pickColumnByAliases = (rawRow, aliases) => {
+  for (const alias of aliases) {
+    for (const [key, value] of Object.entries(rawRow)) {
+      if (normalizeHeader(key) !== alias) continue;
+      if (value !== null && value !== undefined && String(value).trim() !== "") {
+        return { value: String(value).trim(), header: key };
+      }
+    }
+  }
+  return null;
+};
+
+export const normalizeEmployeeRange = (value, accountName = "") => {
+  if (!value) return null;
+  const trimmed = normalizeEnumToken(value);
+
+  if (EMPLOYEE_RANGES.includes(trimmed)) return trimmed;
+
+  const direct = EMPLOYEE_RANGE_NORMALIZE[trimmed] ||
+    EMPLOYEE_RANGE_NORMALIZE[trimmed.replace(/\s/g, "")];
+  if (direct) {
+    console.warn(
+      `Employee range "${value}" normalized to "${direct}"` +
+      (accountName ? ` for ${accountName}` : "")
+    );
+    return direct;
+  }
+
+  const nums = trimmed.replace(/,/g, "").match(/\d+/g)?.map(Number) || [];
+  const max  = nums.length ? Math.max(...nums) : 0;
+
+  if (max >= 10000 || /10,?000\+|10k\+/i.test(trimmed)) return "10,000+";
+  if (max >= 5001)  return "5,001-10,000";
+  if (max >= 1001)  return "1,001-5,000";
+  if (max >= 501)   return "501-1,000";
+  if (max >= 201)   return "201-500";
+  if (max >= 51)    return "51-200";
+  if (max >= 11)    return "11-50";
+  if (max >= 1)     return "1-10";
+
+  console.warn(
+    `Unrecognized employee range "${value}"` +
+    (accountName ? ` for ${accountName}` : "") +
+    " — set to null"
+  );
+  return null;
+};
+
+const applyEmployeeRangeNormalization = (row) => {
+  if (!row.noOfEmployees) return;
+  row.noOfEmployees = normalizeEmployeeRange(row.noOfEmployees, row.accountName);
+};
+
 const isRowEmpty = (rawRow) =>
   Object.values(rawRow).every(
     (v) => v === null || v === undefined || String(v).trim() === ""
   );
 
-const ACCOUNT_NAME_HEADER = /account|company|organiz|organisation|firm|client|customer|vendor|business\s*name|^name$/;
-
 const inferAccountName = (rawRow, mapped) => {
   if (mapped.accountName) return mapped.accountName;
 
-  for (const [key, value] of Object.entries(rawRow)) {
-    if (value === null || value === undefined || String(value).trim() === "") continue;
-    const header = normalizeHeader(key);
-    if (ACCOUNT_NAME_HEADER.test(header)) {
-      return String(value).trim();
-    }
-  }
+  const fromAlias = pickColumnByAliases(rawRow, ACCOUNT_NAME_HEADER_ALIASES);
+  if (fromAlias) return fromAlias.value;
 
   if (mapped.website) {
     return mapped.website
@@ -217,10 +307,71 @@ const inferAccountName = (rawRow, mapped) => {
       .trim();
   }
 
-  const firstValue = Object.values(rawRow).find(
-    (v) => v !== null && v !== undefined && String(v).trim() !== ""
-  );
-  return firstValue ? String(firstValue).trim() : null;
+  return null;
+};
+
+const enrichContactFromAliases = (rawRow, contact) => {
+  const matchedHeaders = [];
+
+  if (!contact.name) {
+    const namePick = pickColumnByAliases(rawRow, CONTACT_NAME_HEADER_ALIASES);
+    if (namePick) {
+      contact.name = namePick.value;
+      matchedHeaders.push(namePick.header);
+    }
+  }
+
+  if (!contact.designation) {
+    const desigPick = pickColumnByAliases(rawRow, DESIGNATION_HEADER_ALIASES);
+    if (desigPick) {
+      contact.designation = desigPick.value;
+      matchedHeaders.push(desigPick.header);
+    }
+  }
+
+  // Client format: job1 / job2 as job-title fallbacks
+  if (!contact.designation && contact.job1) {
+    contact.designation = contact.job1;
+    matchedHeaders.push("job1");
+  }
+  if (!contact.designation && contact.job2) {
+    contact.designation = contact.job2;
+    matchedHeaders.push("job2");
+  }
+
+  if (!contact.department) {
+    const deptPick = pickColumnByAliases(rawRow, DEPARTMENT_HEADER_ALIASES);
+    if (deptPick) {
+      contact.department = deptPick.value;
+      matchedHeaders.push(deptPick.header);
+    }
+  }
+
+  if (!contact.seniority) {
+    const senPick = pickColumnByAliases(rawRow, SENIORITY_HEADER_ALIASES);
+    if (senPick) {
+      contact.seniority = senPick.value;
+      matchedHeaders.push(senPick.header);
+    }
+  }
+
+  delete contact.job1;
+  delete contact.job2;
+
+  if (
+    contact.name || contact.email || contact.phone ||
+    contact.designation || contact.department || contact.seniority
+  ) {
+    console.log("Parsed contact:", {
+      name: contact.name,
+      designation: contact.designation,
+      department: contact.department,
+      seniority: contact.seniority,
+      fromHeaders: matchedHeaders,
+    });
+  }
+
+  return contact;
 };
 
 const mapRowToSchema = (rawRow) => {
@@ -254,7 +405,12 @@ const mapRowToSchema = (rawRow) => {
     delete contact.lastName;
   }
 
-  if (Object.keys(contact).length > 0) {
+  enrichContactFromAliases(rawRow, contact);
+
+  if (
+    contact.name || contact.email || contact.phone ||
+    contact.designation || contact.department || contact.seniority
+  ) {
     contact.isPrimary = true;
     mapped.contacts = [contact];
   }
@@ -269,7 +425,15 @@ const mapRowToSchema = (rawRow) => {
   }
 
   const accountName = inferAccountName(rawRow, mapped);
-  if (accountName) mapped.accountName = accountName;
+  if (accountName) {
+    mapped.accountName = accountName;
+  } else if (!pickColumnByAliases(rawRow, ACCOUNT_NAME_HEADER_ALIASES) && !mapped.website) {
+    console.warn(
+      "No Account Name column found — accountName will be empty for this row. Row will be skipped."
+    );
+  }
+
+  applyEmployeeRangeNormalization(mapped);
 
   return mapped;
 };
@@ -292,6 +456,14 @@ export const sanitizeProspectRow = (row) => {
     const value = getFieldValue(copy, field);
     if (!value) continue;
     if (field === "contact.seniority") continue;
+    if (field === "primaryIndustry") {
+      setFieldValue(copy, field, resolvePrimaryIndustry(value, allowedValues));
+      continue;
+    }
+    if (field === "noOfEmployees") {
+      setFieldValue(copy, field, normalizeEmployeeRange(value, copy.accountName));
+      continue;
+    }
     if (!allowedValues.includes(value)) {
       setFieldValue(copy, field, null);
     }
@@ -320,6 +492,16 @@ const validateRow = (row, rowNumber) => {
 
     if (field === "contact.seniority") continue;
 
+    if (field === "primaryIndustry") {
+      setFieldValue(row, field, resolvePrimaryIndustry(value, allowedValues));
+      continue;
+    }
+
+    if (field === "noOfEmployees") {
+      setFieldValue(row, field, normalizeEmployeeRange(value, row.accountName));
+      continue;
+    }
+
     if (!allowedValues.includes(value)) {
       setFieldValue(row, field, null);
     }
@@ -332,6 +514,107 @@ const validateRow = (row, rowNumber) => {
   }
 
   return errors;
+};
+
+// ── ICP-critical column detection (header row only) ─────────────────────────
+const ICP_COLUMN_PATTERNS = {
+  primaryIndustry: [
+    "industry", "sector", "business type", "primary industry", "commercial sector",
+  ],
+  employeeRange: [
+    "employee", "headcount", "staff", "no of employees", "number of employees",
+    "employee range", "company size", "employees",
+  ],
+  annualRevenue: [
+    "revenue", "arr", "turnover", "annual revenue", "annual turnover", "revenue range",
+  ],
+  country: [
+    "country", "region", "market", "geography", "location", "target market",
+    "target region", "preferential market", "country name",
+  ],
+  techStack: [
+    "tech", "technology", "tech stack", "tools", "software", "platform",
+    "primary tech", "tech category", "technologies used", "technology stack", "tech tools",
+  ],
+  designation: [
+    "designation", "title", "job title", "role", "buyer persona", "contact title",
+    "position", "job role", "seniority", "department", "contact role", "persona",
+  ],
+};
+
+const ICP_TECH_STACK_FIELDS = new Set([
+  "primaryTechStack", "secondaryTechStack", "tertiaryTechStack",
+]);
+
+const ICP_CONTACT_PERSONA_FIELDS = new Set([
+  "designation", "department", "seniority", "job1", "job2",
+]);
+
+const ICP_SCHEMA_FIELDS = {
+  primaryIndustry: "primaryIndustry",
+  employeeRange:   "noOfEmployees",
+  annualRevenue:   "annualRevenue",
+  country:         "country",
+  techStack:       "primaryTechStack",
+  designation:     null,
+};
+
+const headerMatchesIcpPattern = (normalizedHeader, pattern) =>
+  normalizedHeader.includes(pattern.toLowerCase());
+
+const headerMatchesIcpFieldMap = (header, icpKey) => {
+  const mapped = FIELD_MAP[header];
+  if (mapped) {
+    const schemaField = ICP_SCHEMA_FIELDS[icpKey];
+    if (schemaField && mapped === schemaField) return true;
+
+    if (icpKey === "techStack" && ICP_TECH_STACK_FIELDS.has(mapped)) return true;
+
+    if (icpKey === "designation" && mapped.startsWith("contact.")) {
+      const contactField = mapped.split(".")[1];
+      return ICP_CONTACT_PERSONA_FIELDS.has(contactField);
+    }
+  }
+
+  if (icpKey === "designation") {
+    return DESIGNATION_HEADER_ALIASES.includes(header) ||
+      DEPARTMENT_HEADER_ALIASES.includes(header) ||
+      SENIORITY_HEADER_ALIASES.includes(header);
+  }
+
+  return false;
+};
+
+export const detectMissingIcpColumns = (headers = []) => {
+  const normalizedHeaders = headers
+    .map((h) => normalizeHeader(String(h)))
+    .filter(Boolean);
+
+  const missingIcpColumns = [];
+
+  for (const [field, patterns] of Object.entries(ICP_COLUMN_PATTERNS)) {
+    const found = normalizedHeaders.some((header) =>
+      patterns.some((pattern) => headerMatchesIcpPattern(header, pattern)) ||
+      headerMatchesIcpFieldMap(header, field)
+    );
+    if (!found) missingIcpColumns.push(field);
+  }
+
+  console.log("Detected headers:", normalizedHeaders);
+  console.log("Missing columns:", missingIcpColumns);
+
+  return missingIcpColumns;
+};
+
+export const getExcelHeaders = (filePath) => {
+  const workbook  = readFile(filePath);
+  const sheetName = workbook.SheetNames[0];
+  const sheet     = workbook.Sheets[sheetName];
+  const rows      = utils.sheet_to_json(sheet, { header: 1, defval: null, raw: false });
+  const headerRow = rows[0] || [];
+  return headerRow
+    .filter((h) => h !== null && h !== undefined && String(h).trim() !== "")
+    .map((h) => String(h));
 };
 
 export const processExcelFile = (filePath) => {
@@ -356,4 +639,24 @@ export const processExcelFile = (filePath) => {
   });
 
   return { validRows, errorDetails, totalRows };
+};
+
+export const previewExcelFile = (filePath) => {
+  const headers           = getExcelHeaders(filePath);
+  const missingIcpColumns = detectMissingIcpColumns(headers);
+  const { validRows, totalRows, errorDetails } = processExcelFile(filePath);
+
+  return {
+    headers,
+    missingIcpColumns,
+    previewRows: validRows.slice(0, 5).map((row) => ({
+      accountName:     row.accountName     || "",
+      primaryIndustry: row.primaryIndustry || "",
+      noOfEmployees:   row.noOfEmployees   || "",
+      annualRevenue:   row.annualRevenue   || "",
+      country:         row.country         || "",
+    })),
+    totalRows,
+    errorCount: errorDetails.length,
+  };
 };

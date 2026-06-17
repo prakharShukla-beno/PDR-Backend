@@ -2,6 +2,34 @@ import importService from "./import.service.js";
 
 const importController = {
 
+  // POST /api/import/excel/preview — parse headers, detect missing ICP columns
+  previewExcel: async (req, res, next) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No file uploaded. Please upload an Excel file.",
+        });
+      }
+
+      if (!req.file.originalname.match(/\.(xlsx|xls|csv)$/i)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid file type. Only .xlsx, .xls and .csv files are allowed.",
+        });
+      }
+
+      const preview = await importService.previewExcelImport(req.file.path);
+
+      return res.status(200).json({
+        success: true,
+        data: preview,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // POST /api/import/excel
   // Upload file — save non-duplicates and return duplicates to the user
   uploadExcel: async (req, res, next) => {

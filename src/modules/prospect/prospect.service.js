@@ -1,5 +1,6 @@
 import prospectRepository from "./prospect.repository.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
+import Contact from "../contacts/contact.model.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
 import pkg from "xlsx";
 import Contact from "../contacts/contact.model.js";
@@ -375,8 +376,33 @@ ${contacts.length > 0
       filter, page: 1, limit: 999999, sort: { createdAt: -1 },
     });
 
+    const prospectIds = prospects.map((p) => p._id);
+    const contacts = prospectIds.length > 0
+      ? await Contact.find({ accountId: { $in: prospectIds } })
+          .sort({ isPrimary: -1, createdAt: 1 })
+          .lean()
+      : [];
+
+    const contactMap = {};
+    for (const c of contacts) {
+      const key = c.accountId?.toString();
+      if (key && !contactMap[key]) contactMap[key] = c;
+    }
+
     // Map each prospect to a flat row for Excel
-    const rows = prospects.map((p) => ({
+    const rows = prospects.map((p) => {
+      const contact = contactMap[p._id.toString()];
+      const contactName = contact
+        ? [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim()
+        : "";
+      const contactEmail       = contact?.email ?? "";
+      const contactDesignation = contact?.standardizedRoles ?? "";
+      const contactDepartment  = contact?.functionalDomain ?? "";
+      const contactPhone       = contact?.primaryPhone ?? contact?.primaryMobNo ?? "";
+      const contactPhone2      = contact?.secondaryPhone ?? "";
+      const contactLinkedIn    = contact?.linkedIn ?? "";
+
+      return {
       "Account Name":         p.accountName        || "",
       "Website":              p.website            || "",
       "Primary Industry":     p.primaryIndustry    || "",
@@ -397,14 +423,15 @@ ${contacts.length > 0
       "Campaign Name":        p.campaignName       || "",
       "Comments":             p.comments           || "",
       "Source":               p.accountSource      || "",
-      "Contact Name":         p.contacts?.[0]?.name        || "",
-      "Designation":          p.contacts?.[0]?.designation || "",
-      "Department":           p.contacts?.[0]?.department  || "",
-      "Email":                p.contacts?.[0]?.email       || "",
-      "Phone 1":              p.contacts?.[0]?.phone       || "",
-      "Phone 2":              p.contacts?.[0]?.phone2      || "",
-      "LinkedIn":             p.contacts?.[0]?.linkedIn    || "",
-    }));
+      "Contact Name":         contactName,
+      "Designation":          contactDesignation,
+      "Department":           contactDepartment,
+      "Email":                contactEmail,
+      "Phone 1":              contactPhone,
+      "Phone 2":              contactPhone2,
+      "LinkedIn":             contactLinkedIn,
+    };
+    });
 
     // Build Excel workbook from rows array
     const worksheet = utils.json_to_sheet(rows);

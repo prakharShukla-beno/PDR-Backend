@@ -31,6 +31,7 @@ const prospectController = {
   getAll: async (req, res, next) => {
     try {
       const result = await prospectService.getAll(req.query);
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate");
       res.status(200).json({
         success:    true,
         data:       result.prospects,

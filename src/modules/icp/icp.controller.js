@@ -6,6 +6,8 @@ const icpController = {
   // POST /api/icp — naya ICP profile banao
   create: async (req, res, next) => {
     try {
+      console.log("[ICP create] req.body:", JSON.stringify(req.body, null, 2));
+
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({
@@ -22,6 +24,20 @@ const icpController = {
         data: profile,
       });
     } catch (error) {
+      console.error("[ICP create] error:", error.message);
+      if (error.errors) {
+        console.error("[ICP create] validation details:", JSON.stringify(error.errors, null, 2));
+      }
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+          errors: Object.entries(error.errors || {}).map(([field, err]) => ({
+            field,
+            message: err.message,
+          })),
+        });
+      }
       next(error);
     }
   },
@@ -55,6 +71,8 @@ const icpController = {
   // PUT /api/icp/:id — update the profile
   update: async (req, res, next) => {
     try {
+      console.log("[ICP update] req.body:", JSON.stringify(req.body, null, 2));
+
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({
@@ -70,6 +88,20 @@ const icpController = {
         data: profile,
       });
     } catch (error) {
+      console.error("[ICP update] error:", error.message);
+      if (error.errors) {
+        console.error("[ICP update] validation details:", JSON.stringify(error.errors, null, 2));
+      }
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+          errors: Object.entries(error.errors || {}).map(([field, err]) => ({
+            field,
+            message: err.message,
+          })),
+        });
+      }
       next(error);
     }
   },
@@ -79,6 +111,25 @@ const icpController = {
     try {
       const result = await icpService.delete(req.params.id);
       res.status(200).json({ success: true, message: result.message });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /api/icp/:id/create-segment — create segment from ICP matches
+  createSegment: async (req, res, next) => {
+    try {
+      const segment = await icpService.createSegmentFromIcp(
+        req.params.id,
+        req.user._id,
+        { name: req.body?.name, isShared: req.body?.isShared }
+      );
+
+      res.status(201).json({
+        success: true,
+        message: `Segment created with ${segment.matchCount} matching accounts`,
+        data: segment,
+      });
     } catch (error) {
       next(error);
     }
@@ -95,6 +146,37 @@ const icpController = {
         data:       result.prospects,
         icpProfile: result.icpProfile,
         pagination: result.pagination,
+        diagnosis:  result.diagnosis || {},
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // GET /api/icp/benchmark — get company benchmark ICP
+  getBenchmark: async (req, res, next) => {
+    try {
+      const profile = await icpService.getBenchmark();
+      if (!profile) {
+        return res.status(404).json({
+          success: false,
+          message: "No benchmark ICP set",
+        });
+      }
+      res.status(200).json({ success: true, data: profile });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // PUT /api/icp/:id/set-benchmark — mark ICP as company benchmark
+  setBenchmark: async (req, res, next) => {
+    try {
+      const profile = await icpService.setBenchmark(req.params.id);
+      res.status(200).json({
+        success: true,
+        message: "ICP set as benchmark successfully",
+        data: profile,
       });
     } catch (error) {
       next(error);

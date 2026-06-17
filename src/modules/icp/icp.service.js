@@ -1,15 +1,56 @@
 import icpRepository from "./icp.repository.js";
+import ICP from "./icp.model.js";
 import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
+import segmentRepository from "../segment/segment.repository.js";
+import { calculateIcpMatchScore } from "../../common/utils/icpScoring.js";
 
-// Region → Countries mapping (matches image 1 reference)
+// Region → Countries mapping (synced with ICP Builder Preferential Market tab)
 const REGION_COUNTRIES = {
-  "Asia-Pacific (APAC)":   ["China", "Japan", "India", "Australia", "South Korea", "Indonesia", "Singapore"],
-  "Middle East":           ["Saudi Arabia", "UAE", "Israel", "Qatar", "Kuwait", "Jordan", "Oman"],
-  "Africa":                ["Nigeria", "South Africa", "Kenya", "Egypt", "Ghana", "Ethiopia"],
-  "Europe":                ["Germany", "UK", "France", "Italy", "Spain", "Netherlands", "Switzerland"],
-  "North America (NA)":    ["United States", "Canada"],
-  "Latin America (LATAM)": ["Brazil", "Mexico", "Argentina", "Chile", "Colombia", "Peru"],
+  "North America (NA)": ["United States", "Canada", "Mexico"],
+  "Europe": [
+    "United Kingdom", "Germany", "France", "Netherlands", "Sweden",
+    "Norway", "Denmark", "Finland", "Switzerland", "Austria", "Belgium",
+    "Spain", "Italy", "Portugal", "Ireland", "Poland", "Czech Republic",
+    "Hungary", "Romania", "Bulgaria", "Greece", "Croatia", "Slovakia",
+    "Slovenia", "Estonia", "Latvia", "Lithuania", "Luxembourg", "Malta",
+    "Cyprus", "Iceland", "Serbia", "Ukraine", "Belarus", "Bosnia and Herzegovina",
+  ],
+  "Asia-Pacific (APAC)": [
+    "China", "Japan", "South Korea", "Australia", "New Zealand",
+    "Hong Kong", "Taiwan", "Macau", "Mongolia", "Papua New Guinea",
+    "Fiji", "Samoa", "Tonga", "Vanuatu", "Solomon Islands",
+  ],
+  "South Asia": [
+    "India", "Pakistan", "Bangladesh", "Sri Lanka", "Nepal",
+    "Bhutan", "Maldives", "Afghanistan",
+  ],
+  "Southeast Asia": [
+    "Singapore", "Indonesia", "Malaysia", "Thailand", "Vietnam",
+    "Philippines", "Myanmar", "Cambodia", "Laos", "Brunei",
+    "Timor-Leste",
+  ],
+  "Middle East": [
+    "Turkey", "Israel", "Jordan", "Lebanon", "Syria", "Iraq",
+    "Iran", "Yemen", "Oman", "Kuwait", "Bahrain", "Qatar",
+  ],
+  "GCC": [
+    "Saudi Arabia", "United Arab Emirates", "Qatar", "Kuwait",
+    "Bahrain", "Oman",
+  ],
+  "Latin America (LATAM)": [
+    "Brazil", "Mexico", "Argentina", "Colombia", "Chile", "Peru",
+    "Venezuela", "Ecuador", "Bolivia", "Paraguay", "Uruguay",
+    "Costa Rica", "Panama", "Guatemala", "Honduras", "El Salvador",
+    "Nicaragua", "Dominican Republic", "Cuba", "Puerto Rico",
+    "Trinidad and Tobago", "Jamaica",
+  ],
+  "Africa": [
+    "South Africa", "Nigeria", "Kenya", "Egypt", "Ghana", "Ethiopia",
+    "Tanzania", "Uganda", "Rwanda", "Senegal", "Ivory Coast",
+    "Cameroon", "Angola", "Mozambique", "Zambia", "Zimbabwe",
+    "Morocco", "Tunisia", "Algeria", "Libya", "Sudan",
+  ],
 };
 
 // Expand regions to country arrays — used in DB query
@@ -41,37 +82,35 @@ const hasNoTechStack = {
   ],
 };
 
-// Seniority keywords for matching against contact.standardizedRoles (no seniority field on Contact)
-const SENIORITY_ROLE_PATTERNS = {
-  "C-Suite":   /Chief|CEO|CFO|CTO|COO|CMO|CIO|CPO|President|Founder/i,
-  "VP":        /\bVP\b|Vice President/i,
-  "Director":  /Director/i,
-  "Manager":   /Manager/i,
-  "Senior IC": /Senior|Lead|Principal|Staff/i,
-};
-
 /** Build MongoDB filter for ICP → prospect matching */
 const buildProspectMatchFilter = (profile) => {
   const conditions = [];
 
-  const industries = [
-    ...(profile.industries || []),
-    ...(profile.commercialSector || []),
+  // Match sector-level (industries/commercialSectors) AND leaf-level (mappedIndustries)
+  // Prospects often store sector in primaryIndustry e.g. "IT & ITES"
+  const industryTargets = [
+    ...new Set([
+      ...(profile.mappedIndustries || []),
+      ...(profile.industries || []),
+      ...(profile.commercialSectors || []),
+    ]),
   ];
-  if (industries.length > 0) {
-    conditions.push({ primaryIndustry: { $in: [...new Set(industries)] } });
+  if (industryTargets.length > 0) {
+    conditions.push({ primaryIndustry: { $in: industryTargets } });
   }
+
+  // Optional — if empty, skip filter; if set, match value OR missing data on prospect
   if (profile.businessModels?.length > 0) {
-    conditions.push({ businessModel: { $in: profile.businessModels } });
+    conditions.push(lenientFieldInFilter("businessModel", profile.businessModels));
   }
   if (profile.commercialCategories?.length > 0) {
-    conditions.push({ commercialCategory: { $in: profile.commercialCategories } });
+    conditions.push(lenientFieldInFilter("commercialCategory", profile.commercialCategories));
   }
   if (profile.annualRevenues?.length > 0) {
-    conditions.push({ annualRevenue: { $in: profile.annualRevenues } });
+    conditions.push(lenientFieldInFilter("annualRevenue", profile.annualRevenues));
   }
   if (profile.employeeRanges?.length > 0) {
-    conditions.push({ noOfEmployees: { $in: profile.employeeRanges } });
+    conditions.push(lenientFieldInFilter("noOfEmployees", profile.employeeRanges));
   }
 
   const regionIncludedCountries = expandRegions(profile.targetRegionsInclude || []);
@@ -98,12 +137,14 @@ const buildProspectMatchFilter = (profile) => {
     conditions.push({ country: countryNinFilter(allExcluded) });
   }
 
-  // Include: match any listed tool, or allow prospects with no tech data yet
+  // Tech: match any included tool OR allow empty/missing/unparsed string (enrich later)
+  // Buyer persona is scoring-only — never applied here (see icpScoring.js)
   if (profile.techStackInclude?.length > 0) {
     conditions.push({
       $or: [
         { primaryTechStack: { $in: profile.techStackInclude } },
         hasNoTechStack,
+        { primaryTechStack: { $type: "string" } },
       ],
     });
   }
@@ -116,10 +157,152 @@ const buildProspectMatchFilter = (profile) => {
   return { $and: conditions };
 };
 
+const emptyFieldFilter = (field) => ({
+  $or: [
+    { [field]: null },
+    { [field]: "" },
+    { [field]: { $exists: false } },
+  ],
+});
+
+/** Match ICP values OR allow missing prospect data (scored lower in icpScoring) */
+const lenientFieldInFilter = (field, values) => ({
+  $or: [{ [field]: { $in: values } }, ...emptyFieldFilter(field).$or],
+});
+
+/** Diagnose missing prospect data for active ICP filters (0-match scenarios) */
+const buildMatchDiagnosis = async (profile) => {
+  const diagnosis      = {};
+  const totalProspects = await Prospect.countDocuments({});
+  if (totalProspects === 0) return diagnosis;
+
+  if (profile.mappedIndustries?.length > 0) {
+    const nullCount = await Prospect.countDocuments(emptyFieldFilter("primaryIndustry"));
+    if (nullCount > 0) {
+      diagnosis.primaryIndustry = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  if (profile.employeeRanges?.length > 0) {
+    const nullCount = await Prospect.countDocuments(emptyFieldFilter("noOfEmployees"));
+    if (nullCount > 0) {
+      diagnosis.employeeRange = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  if (profile.annualRevenues?.length > 0) {
+    const nullCount = await Prospect.countDocuments(emptyFieldFilter("annualRevenue"));
+    if (nullCount > 0) {
+      diagnosis.annualRevenue = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  if (profile.targetRegionsInclude?.length > 0 || profile.targetCountriesInclude?.length > 0) {
+    const nullCount = await Prospect.countDocuments(emptyFieldFilter("country"));
+    if (nullCount > 0) {
+      diagnosis.country = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  if (profile.techCategoriesInclude?.length > 0 || profile.techStackInclude?.length > 0) {
+    const nullCount = await Prospect.countDocuments(hasNoTechStack);
+    if (nullCount > 0) {
+      diagnosis.techStack = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  if (profile.buyerPersona?.designations?.length > 0) {
+    const accountsWithContactRoles = await Contact.distinct("accountId", {
+      isLinked: true,
+      standardizedRoles: { $nin: [null, ""] },
+    });
+    const nullCount = totalProspects - accountsWithContactRoles.length;
+    if (nullCount > 0) {
+      diagnosis.designation = {
+        nullCount,
+        totalProspects,
+        percentage: Math.round((nullCount / totalProspects) * 100),
+      };
+    }
+  }
+
+  return diagnosis;
+};
+
+const ALLOWED_ICP_FIELDS = [
+  "name", "description", "industries", "commercialSectors", "subSectors",
+  "mappedIndustries", "businessModels", "annualRevenues", "employeeRanges",
+  "commercialCategories", "targetRegionsInclude", "targetRegionsExclude",
+  "targetRegionCountriesExclude", "targetCountriesInclude", "targetCountriesExclude",
+  "techStackInclude", "techStackExclude", "techCategoriesInclude", "techCategoriesExclude",
+  "buyerPersona", "isActive", "isBenchmark",
+];
+
+const normalizeBuyerPersona = (persona = {}) => ({
+  functionalDomains: Array.isArray(persona.functionalDomains) ? persona.functionalDomains : [],
+  seniorityLevels:   Array.isArray(persona.seniorityLevels)   ? persona.seniorityLevels   : [],
+  designations:      Array.isArray(persona.designations)      ? persona.designations      : [],
+});
+
+/** Pick only schema-known fields and normalize nested buyerPersona */
+const sanitizeIcpPayload = (data = {}) => {
+  const payload = {};
+
+  for (const key of ALLOWED_ICP_FIELDS) {
+    if (data[key] !== undefined) payload[key] = data[key];
+  }
+
+  // Legacy / mistaken frontend keys → canonical schema fields
+  if (!payload.targetRegionsInclude?.length && Array.isArray(data.regionsInclude)) {
+    payload.targetRegionsInclude = data.regionsInclude;
+  }
+  if (!payload.targetRegionsExclude?.length && Array.isArray(data.regionsExclude)) {
+    payload.targetRegionsExclude = data.regionsExclude;
+  }
+  if (!payload.targetCountriesInclude?.length && Array.isArray(data.countriesInclude)) {
+    payload.targetCountriesInclude = data.countriesInclude;
+  }
+  if (!payload.targetCountriesExclude?.length && Array.isArray(data.countriesExclude)) {
+    payload.targetCountriesExclude = data.countriesExclude;
+  }
+  if (Array.isArray(data.countries) && !payload.targetCountriesInclude?.length) {
+    payload.targetCountriesInclude = data.countries;
+  }
+
+  if (data.buyerPersona !== undefined || payload.buyerPersona !== undefined) {
+    payload.buyerPersona = normalizeBuyerPersona(data.buyerPersona ?? payload.buyerPersona);
+  }
+
+  if (payload.description === "") payload.description = null;
+
+  return payload;
+};
+
 const icpService = {
 
   create: async (data, userId) => {
-    return await icpRepository.create({ ...data, createdBy: userId });
+    const payload = sanitizeIcpPayload(data);
+    return await icpRepository.create({ ...payload, createdBy: userId });
   },
 
   getAll: async ({ page, limit, isActive }) => {
@@ -152,7 +335,7 @@ const icpService = {
       error.statusCode = 404;
       throw error;
     }
-    return await icpRepository.update(id, data);
+    return await icpRepository.update(id, sanitizeIcpPayload(data));
   },
 
   delete: async (id) => {
@@ -176,17 +359,32 @@ const icpService = {
     }
 
     const filter = buildProspectMatchFilter(profile);
+    console.log("[matchProspects] ICP filter:", JSON.stringify(filter));
 
     const skip = (Number(page) - 1) * Number(limit);
 
     const [prospects, total] = await Promise.all([
       Prospect.find(filter)
-        .select("accountName website primaryIndustry country businessModel annualRevenue noOfEmployees techFitScore salesPriority clvRanking intentSignal")
+        .select("accountName website primaryIndustry country businessModel annualRevenue noOfEmployees primaryTechStack techFitScore salesPriority clvRanking intentSignal")
         .sort({ techFitScore: -1 })
         .skip(skip)
         .limit(Number(limit)),
       Prospect.countDocuments(filter),
     ]);
+
+    console.log("[matchProspects] total matches:", total);
+    if (prospects.length > 0) {
+      console.log(
+        "Sample prospect techStack:",
+        prospects[0]?.primaryTechStack,
+        typeof prospects[0]?.primaryTechStack
+      );
+    } else {
+      const sample = await Prospect.findOne()
+        .select("accountName primaryIndustry noOfEmployees country primaryTechStack")
+        .lean();
+      console.log("[matchProspects] 0 matches — sample prospect in DB:", sample);
+    }
 
     // Contact counts per prospect
     const prospectIds = prospects.map(p => p._id);
@@ -197,14 +395,39 @@ const icpService = {
     const countMap = {};
     contactCounts.forEach(c => { countMap[c._id.toString()] = c.count; });
 
-    const enrichedProspects = prospects.map(p => ({
-      ...p.toObject(),
-      contactCount: countMap[p._id.toString()] || 0,
-    }));
+    const enrichedProspects = await Promise.all(
+      prospects.map(async (p) => {
+        const scoreResult = await calculateIcpMatchScore(
+          p.toObject(),
+          profile,
+          Contact
+        );
+        return {
+          ...p.toObject(),
+          icpMatchScore: scoreResult.icpMatchScore,
+          icpScoreBreakdown: scoreResult.breakdown,
+          contactCount: countMap[p._id.toString()] || 0,
+        };
+      })
+    );
+
+    enrichedProspects.sort((a, b) => b.icpMatchScore - a.icpMatchScore);
+
+    const totalProspectsInDb = await Prospect.countDocuments({});
+    const matchRatio         = totalProspectsInDb > 0 ? total / totalProspectsInDb : 0;
+    const shouldDiagnose     = total === 0 || matchRatio < 0.05;
+    const diagnosis          = (shouldDiagnose && total === 0)
+      ? await buildMatchDiagnosis(profile)
+      : {};
 
     return {
-      icpProfile: { id: profile._id, name: profile.name },
+      icpProfile: {
+        id: profile._id,
+        name: profile.name,
+        isBenchmark: profile.isBenchmark || false,
+      },
       prospects:  enrichedProspects,
+      diagnosis,
       pagination: {
         total,
         page:       Number(page),
@@ -212,6 +435,75 @@ const icpService = {
         totalPages: Math.ceil(total / Number(limit)),
       },
     };
+  },
+
+  setBenchmark: async (id) => {
+    await ICP.updateMany({}, { isBenchmark: false });
+
+    const profile = await icpRepository.update(id, { isBenchmark: true });
+    if (!profile) {
+      const error = new Error("ICP profile not found");
+      error.statusCode = 404;
+      throw error;
+    }
+    return profile;
+  },
+
+  getBenchmark: async () => {
+    return await ICP.findOne({ isBenchmark: true })
+      .populate("createdBy", "name email");
+  },
+
+  // ── Create segment from ICP matching prospects (one-click) ────────────────
+  createSegmentFromIcp: async (id, userId, options = {}) => {
+    const profile = await icpRepository.findById(id);
+    if (!profile) {
+      const error = new Error("ICP profile not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const filter = buildProspectMatchFilter(profile);
+    const prospects = await Prospect.find(filter).select("_id").lean();
+    const ids = prospects.map((p) => p._id);
+
+    if (ids.length === 0) {
+      const error = new Error(
+        "No prospects match this ICP. Adjust ICP filters before creating a segment."
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const industryTargets = [
+      ...new Set([
+        ...(profile.mappedIndustries || []),
+        ...(profile.industries || []),
+        ...(profile.commercialSectors || []),
+      ]),
+    ];
+
+    const segment = await segmentRepository.create({
+      name: options.name?.trim() || `${profile.name} — Segment`,
+      description: profile.description || null,
+      icpId: profile._id,
+      createdBy: userId,
+      isShared: options.isShared ?? false,
+      filters: {
+        industries: industryTargets,
+        businessModels: profile.businessModels || [],
+        employeeRanges: profile.employeeRanges || [],
+        annualRevenues: profile.annualRevenues || [],
+        countries: profile.targetCountriesInclude || [],
+      },
+      matchedAccountIds: [],
+      matchCount: 0,
+      lastSyncedAt: null,
+      enrichStatus: "pending",
+    });
+
+    await segmentRepository.saveSnapshot(segment._id, ids);
+    return await segmentRepository.findById(segment._id);
   },
 
   // ── Buyer persona match ───────────────────────────────────────────────────
@@ -223,40 +515,23 @@ const icpService = {
       throw error;
     }
 
-    const persona = profile.buyerPersona;
+    const persona = profile.buyerPersona || {};
+    const designations =
+      persona.designations?.length > 0
+        ? persona.designations
+        : (persona.targetDesignations || []);
 
-    if (
-      persona.targetSeniorities.length  === 0 &&
-      persona.targetDepartments.length  === 0 &&
-      persona.targetDesignations.length === 0
-    ) {
-      const error = new Error("No buyer persona criteria defined in this ICP profile");
+    if (designations.length === 0) {
+      const error = new Error("No buyer persona designations defined in this ICP profile");
       error.statusCode = 400;
       throw error;
     }
 
     const contactFilter = { isLinked: true };
 
-    // Fixed: separate if-blocks for each persona field
-    if (persona.targetDepartments.length > 0) {
-      contactFilter.functionalDomain = { $in: persona.targetDepartments };
-    }
-    if (persona.targetSeniorities.length > 0) {
-      const patterns = persona.targetSeniorities
-        .map((s) => SENIORITY_ROLE_PATTERNS[s])
-        .filter(Boolean);
-      if (patterns.length > 0) {
-        contactFilter.standardizedRoles = {
-          $regex: patterns.map((p) => p.source).join("|"),
-          $options: "i",
-        };
-      }
-    }
-    if (persona.targetDesignations.length > 0) {
-      contactFilter.standardizedRoles = {
-        $in: persona.targetDesignations.map(d => new RegExp(d, "i")),
-      };
-    }
+    contactFilter.standardizedRoles = {
+      $in: designations.map((d) => new RegExp(escapeRegex(d), "i")),
+    };
 
     const skip = (Number(page) - 1) * Number(limit);
 
@@ -296,4 +571,5 @@ const icpService = {
   },
 };
 
+export { buildProspectMatchFilter };
 export default icpService;
