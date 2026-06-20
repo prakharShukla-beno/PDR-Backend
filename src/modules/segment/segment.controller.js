@@ -88,6 +88,23 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
+  // POST /api/segments/:id/add-accounts
+  // Selected account IDs ko existing segment snapshot mein add karo (no duplicates)
+  addAccounts: async (req, res, next) => {
+    try {
+      const { accountIds } = req.body;
+      if (!Array.isArray(accountIds) || accountIds.length === 0) {
+        return res.status(400).json({ success: false, message: "accountIds array required" });
+      }
+      const segment = await segmentService.addAccounts(req.params.id, accountIds);
+      res.status(200).json({
+        success: true,
+        message: `${accountIds.length} account(s) added to segment`,
+        data: { matchCount: segment.matchCount },
+      });
+    } catch (error) { next(error); }
+  },
+
   // POST /api/segments/:id/enrich-score
   // Segment ke matched accounts pe enrichment + tech fit scoring chalaao
   // Background mein run hota hai — turant 202 return karta hai
