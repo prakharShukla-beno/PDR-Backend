@@ -495,6 +495,29 @@ const segmentService = {
       status:        "running",
     };
   },
+  // ─── Add accounts to existing segment (manual add from accounts page) ────────
+  // Existing matchedAccountIds mein naye IDs merge karo — duplicates nahi honge
+  addAccounts: async (segmentId, accountIds) => {
+    const segment = await segmentRepository.findById(segmentId);
+    if (!segment) {
+      const err = new Error("Segment not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    // Existing IDs (string) + new IDs — deduplicate
+    const existingSet = new Set(
+      segment.matchedAccountIds.map((id) => id.toString())
+    );
+    accountIds.forEach((id) => existingSet.add(id.toString()));
+
+    const mergedIds = [...existingSet];
+
+    return await segmentRepository.update(segmentId, {
+      matchedAccountIds: mergedIds,
+      matchCount: mergedIds.length,
+    });
+  },
 };
 
 export default segmentService;
