@@ -1,5 +1,6 @@
 import { validationResult } from "express-validator";
 import icpService from "./icp.service.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const icpController = {
 
@@ -16,7 +17,8 @@ const icpController = {
         });
       }
 
-      const profile = await icpService.create(req.body, req.user._id);
+      const companyId = getCompanyIdFromRequest(req);
+      const profile = await icpService.create(req.body, req.user._id, companyId);
 
       res.status(201).json({
         success: true,
@@ -45,8 +47,9 @@ const icpController = {
   // GET /api/icp — saare profiles
   getAll: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const { page, limit, isActive } = req.query;
-      const result = await icpService.getAll({ page, limit, isActive });
+      const result = await icpService.getAll({ page, limit, isActive, companyId });
 
       res.status(200).json({
         success:    true,
@@ -61,7 +64,8 @@ const icpController = {
   // GET /api/icp/:id — single profile
   getById: async (req, res, next) => {
     try {
-      const profile = await icpService.getById(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const profile = await icpService.getById(req.params.id, companyId);
       res.status(200).json({ success: true, data: profile });
     } catch (error) {
       next(error);
@@ -81,7 +85,8 @@ const icpController = {
         });
       }
 
-      const profile = await icpService.update(req.params.id, req.body);
+      const companyId = getCompanyIdFromRequest(req);
+      const profile = await icpService.update(req.params.id, req.body, companyId);
       res.status(200).json({
         success: true,
         message: "ICP profile updated successfully",
@@ -109,7 +114,8 @@ const icpController = {
   // DELETE /api/icp/:id — delete the profile
   delete: async (req, res, next) => {
     try {
-      const result = await icpService.delete(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await icpService.delete(req.params.id, companyId);
       res.status(200).json({ success: true, message: result.message });
     } catch (error) {
       next(error);
@@ -119,9 +125,11 @@ const icpController = {
   // POST /api/icp/:id/create-segment — create segment from ICP matches
   createSegment: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const segment = await icpService.createSegmentFromIcp(
         req.params.id,
         req.user._id,
+        companyId,
         { name: req.body?.name, isShared: req.body?.isShared }
       );
 
@@ -138,8 +146,9 @@ const icpController = {
   // GET /api/icp/:id/match-prospects — match prospects using ICP criteria
   matchProspects: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const { page, limit } = req.query;
-      const result = await icpService.matchProspects(req.params.id, { page, limit });
+      const result = await icpService.matchProspects(req.params.id, { page, limit, companyId });
 
       res.status(200).json({
         success:    true,
@@ -156,7 +165,8 @@ const icpController = {
   // GET /api/icp/benchmark — get company benchmark ICP
   getBenchmark: async (req, res, next) => {
     try {
-      const profile = await icpService.getBenchmark();
+      const companyId = getCompanyIdFromRequest(req);
+      const profile = await icpService.getBenchmark(companyId);
       if (!profile) {
         return res.status(404).json({
           success: false,
@@ -172,7 +182,8 @@ const icpController = {
   // PUT /api/icp/:id/set-benchmark — mark ICP as company benchmark
   setBenchmark: async (req, res, next) => {
     try {
-      const profile = await icpService.setBenchmark(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const profile = await icpService.setBenchmark(req.params.id, companyId);
       res.status(200).json({
         success: true,
         message: "ICP set as benchmark successfully",
@@ -186,8 +197,9 @@ const icpController = {
   // GET /api/icp/:id/match-persona — find best POC using buyer persona
   matchBuyerPersona: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const { page, limit } = req.query;
-      const result = await icpService.matchBuyerPersona(req.params.id, { page, limit });
+      const result = await icpService.matchBuyerPersona(req.params.id, { page, limit, companyId });
 
       res.status(200).json({
         success:      true,

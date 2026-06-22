@@ -13,13 +13,15 @@ import dashboardRoutes     from "../modules/dashboard/dashboard.routes.js";
 import icpRoutes           from "../modules/icp/icp.routes.js";
 import auditLogRoutes      from "../modules/auditLog/auditLog.routes.js";
 import contactRoutes       from "../modules/contacts/contact.routes.js";
-import segmentRoutes       from "../modules/segment/segment.routes.js";  // ← added
+import segmentRoutes       from "../modules/segment/segment.routes.js";
+import userRoutes          from "../modules/user/user.routes.js";
 import migrationRoutes     from "./migration.route.js";
 
 const router = Router();
 
 router.use("/migrate",          migrationRoutes);
 router.use("/auth",             authRoutes);
+router.use("/users",            userRoutes);
 router.use("/prospects",        prospectRoutes);
 router.use("/import",           importRoutes);
 router.use("/import/contacts",  contactImportRoutes);
@@ -33,6 +35,7 @@ router.use("/dashboard",        dashboardRoutes);
 router.use("/icp",              icpRoutes);
 router.use("/audit-logs",       auditLogRoutes);
 router.use("/contacts",         contactRoutes);
-router.use("/segments",         segmentRoutes);     // ← added
+router.use("/segments",         segmentRoutes);
+router.use("/segment",          segmentRoutes); // backward-compat alias
 
 export default router;

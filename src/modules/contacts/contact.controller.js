@@ -1,9 +1,9 @@
 import { validationResult } from "express-validator";
 import contactService from "./contact.service.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const contactController = {
 
-  // POST /api/contacts
   create: async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -14,7 +14,8 @@ const contactController = {
         });
       }
 
-      const contact = await contactService.create(req.body);
+      const companyId = getCompanyIdFromRequest(req);
+      const contact = await contactService.create(companyId, req.body);
 
       res.status(201).json({
         success: true,
@@ -26,10 +27,10 @@ const contactController = {
     }
   },
 
-  // GET /api/contacts
   getAll: async (req, res, next) => {
     try {
-      const result = await contactService.getAll(req.query);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await contactService.getAll(companyId, req.query);
 
       res.status(200).json({
         success: true,
@@ -41,10 +42,10 @@ const contactController = {
     }
   },
 
-  // GET /api/contacts/:id
   getById: async (req, res, next) => {
     try {
-      const contact = await contactService.getById(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const contact = await contactService.getById(req.params.id, companyId);
 
       res.status(200).json({
         success: true,
@@ -55,10 +56,10 @@ const contactController = {
     }
   },
 
-  // GET /api/contacts/account/:accountId  — all contacts for an account
   getByAccountId: async (req, res, next) => {
     try {
-      const contacts = await contactService.getByAccountId(req.params.accountId);
+      const companyId = getCompanyIdFromRequest(req);
+      const contacts = await contactService.getByAccountId(req.params.accountId, companyId);
 
       res.status(200).json({
         success: true,
@@ -69,10 +70,10 @@ const contactController = {
     }
   },
 
-  // PUT /api/contacts/:id
   update: async (req, res, next) => {
     try {
-      const updated = await contactService.update(req.params.id, req.body);
+      const companyId = getCompanyIdFromRequest(req);
+      const updated = await contactService.update(req.params.id, req.body, companyId);
 
       res.status(200).json({
         success: true,
@@ -84,10 +85,10 @@ const contactController = {
     }
   },
 
-  // DELETE /api/contacts/:id
   delete: async (req, res, next) => {
     try {
-      const result = await contactService.delete(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await contactService.delete(req.params.id, companyId);
 
       res.status(200).json({
         success: true,
@@ -98,11 +99,11 @@ const contactController = {
     }
   },
 
-  // POST /api/contacts/:id/campaigns/:campaignId  — add contact to campaign
   addToCampaign: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const { id, campaignId } = req.params;
-      const updated = await contactService.addToCampaign(id, campaignId);
+      const updated = await contactService.addToCampaign(id, campaignId, companyId);
 
       res.status(200).json({
         success: true,
@@ -114,11 +115,11 @@ const contactController = {
     }
   },
 
-  // DELETE /api/contacts/:id/campaigns/:campaignId  — remove contact from campaign
   removeFromCampaign: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const { id, campaignId } = req.params;
-      const updated = await contactService.removeFromCampaign(id, campaignId);
+      const updated = await contactService.removeFromCampaign(id, campaignId, companyId);
 
       res.status(200).json({
         success: true,

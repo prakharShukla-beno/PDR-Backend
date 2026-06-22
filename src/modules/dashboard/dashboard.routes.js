@@ -5,6 +5,10 @@ import authMiddleware from "../../common/middlewares/auth.middleware.js";
 const router = Router();
 router.use(authMiddleware);
 
+// Root + aliases — main dashboard entry points
+router.get("/",          dashboardController.getSummary);
+router.get("/stats",     dashboardController.getSummary);
+
 // Existing routes
 router.get("/summary",             dashboardController.getSummary);
 router.get("/by-industry",         dashboardController.getByIndustry);

@@ -4,6 +4,7 @@ import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
 import segmentRepository from "../segment/segment.repository.js";
 import { calculateIcpMatchScore } from "../../common/utils/icpScoring.js";
+import { companyFilter, companyMatchStage } from "../../common/utils/tenantScope.js";
 
 // Region → Countries mapping (synced with ICP Builder Preferential Market tab)
 const REGION_COUNTRIES = {
@@ -171,13 +172,13 @@ const lenientFieldInFilter = (field, values) => ({
 });
 
 /** Diagnose missing prospect data for active ICP filters (0-match scenarios) */
-const buildMatchDiagnosis = async (profile) => {
-  const diagnosis      = {};
-  const totalProspects = await Prospect.countDocuments({});
+const buildMatchDiagnosis = async (profile, companyId) => {
+    const diagnosis      = {};
+    const totalProspects = await Prospect.countDocuments(companyFilter(companyId, {}));
   if (totalProspects === 0) return diagnosis;
 
   if (profile.mappedIndustries?.length > 0) {
-    const nullCount = await Prospect.countDocuments(emptyFieldFilter("primaryIndustry"));
+    const nullCount = await Prospect.countDocuments(companyFilter(companyId, emptyFieldFilter("primaryIndustry")));
     if (nullCount > 0) {
       diagnosis.primaryIndustry = {
         nullCount,
@@ -188,7 +189,7 @@ const buildMatchDiagnosis = async (profile) => {
   }
 
   if (profile.employeeRanges?.length > 0) {
-    const nullCount = await Prospect.countDocuments(emptyFieldFilter("noOfEmployees"));
+    const nullCount = await Prospect.countDocuments(companyFilter(companyId, emptyFieldFilter("noOfEmployees")));
     if (nullCount > 0) {
       diagnosis.employeeRange = {
         nullCount,
@@ -199,7 +200,7 @@ const buildMatchDiagnosis = async (profile) => {
   }
 
   if (profile.annualRevenues?.length > 0) {
-    const nullCount = await Prospect.countDocuments(emptyFieldFilter("annualRevenue"));
+    const nullCount = await Prospect.countDocuments(companyFilter(companyId, emptyFieldFilter("annualRevenue")));
     if (nullCount > 0) {
       diagnosis.annualRevenue = {
         nullCount,
@@ -210,7 +211,7 @@ const buildMatchDiagnosis = async (profile) => {
   }
 
   if (profile.targetRegionsInclude?.length > 0 || profile.targetCountriesInclude?.length > 0) {
-    const nullCount = await Prospect.countDocuments(emptyFieldFilter("country"));
+    const nullCount = await Prospect.countDocuments(companyFilter(companyId, emptyFieldFilter("country")));
     if (nullCount > 0) {
       diagnosis.country = {
         nullCount,
@@ -221,7 +222,7 @@ const buildMatchDiagnosis = async (profile) => {
   }
 
   if (profile.techCategoriesInclude?.length > 0 || profile.techStackInclude?.length > 0) {
-    const nullCount = await Prospect.countDocuments(hasNoTechStack);
+    const nullCount = await Prospect.countDocuments(companyFilter(companyId, hasNoTechStack));
     if (nullCount > 0) {
       diagnosis.techStack = {
         nullCount,
@@ -233,6 +234,7 @@ const buildMatchDiagnosis = async (profile) => {
 
   if (profile.buyerPersona?.designations?.length > 0) {
     const accountsWithContactRoles = await Contact.distinct("accountId", {
+      companyId,
       isLinked: true,
       standardizedRoles: { $nin: [null, ""] },
     });
@@ -300,13 +302,13 @@ const sanitizeIcpPayload = (data = {}) => {
 
 const icpService = {
 
-  create: async (data, userId) => {
+  create: async (data, userId, companyId) => {
     const payload = sanitizeIcpPayload(data);
-    return await icpRepository.create({ ...payload, createdBy: userId });
+    return await icpRepository.create({ ...payload, createdBy: userId, companyId });
   },
 
-  getAll: async ({ page, limit, isActive }) => {
-    const { profiles, total } = await icpRepository.findAll({ page, limit, isActive });
+  getAll: async ({ page, limit, isActive, companyId }) => {
+    const { profiles, total } = await icpRepository.findAll({ page, limit, isActive, companyId });
     return {
       profiles,
       pagination: {
@@ -318,8 +320,8 @@ const icpService = {
     };
   },
 
-  getById: async (id) => {
-    const profile = await icpRepository.findById(id);
+  getById: async (id, companyId) => {
+    const profile = await icpRepository.findById(id, companyId);
     if (!profile) {
       const error = new Error("ICP profile not found");
       error.statusCode = 404;
@@ -328,37 +330,40 @@ const icpService = {
     return profile;
   },
 
-  update: async (id, data) => {
-    const profile = await icpRepository.findById(id);
+  update: async (id, data, companyId) => {
+    const profile = await icpRepository.findById(id, companyId);
     if (!profile) {
       const error = new Error("ICP profile not found");
       error.statusCode = 404;
       throw error;
     }
-    return await icpRepository.update(id, sanitizeIcpPayload(data));
+    return await icpRepository.update(id, sanitizeIcpPayload(data), companyId);
   },
 
-  delete: async (id) => {
-    const profile = await icpRepository.findById(id);
+  delete: async (id, companyId) => {
+    const profile = await icpRepository.findById(id, companyId);
     if (!profile) {
       const error = new Error("ICP profile not found");
       error.statusCode = 404;
       throw error;
     }
-    await icpRepository.delete(id);
+    await icpRepository.delete(id, companyId);
     return { message: "ICP profile deleted successfully" };
   },
 
   // ── Match prospects by ICP criteria ───────────────────────────────────────
-  matchProspects: async (id, { page = 1, limit = 10 }) => {
-    const profile = await icpRepository.findById(id);
+  matchProspects: async (id, { page = 1, limit = 10, companyId }) => {
+    const profile = await icpRepository.findById(id, companyId);
     if (!profile) {
       const error = new Error("ICP profile not found");
       error.statusCode = 404;
       throw error;
     }
 
-    const filter = buildProspectMatchFilter(profile);
+    const icpFilter = buildProspectMatchFilter(profile);
+    const filter = Object.keys(icpFilter).length > 0
+      ? { $and: [companyFilter(companyId, {}), icpFilter] }
+      : companyFilter(companyId, {});
     console.log("[matchProspects] ICP filter:", JSON.stringify(filter));
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -380,7 +385,7 @@ const icpService = {
         typeof prospects[0]?.primaryTechStack
       );
     } else {
-      const sample = await Prospect.findOne()
+      const sample = await Prospect.findOne(companyFilter(companyId, {}))
         .select("accountName primaryIndustry noOfEmployees country primaryTechStack")
         .lean();
       console.log("[matchProspects] 0 matches — sample prospect in DB:", sample);
@@ -389,7 +394,7 @@ const icpService = {
     // Contact counts per prospect
     const prospectIds = prospects.map(p => p._id);
     const contactCounts = await Contact.aggregate([
-      { $match: { accountId: { $in: prospectIds } } },
+      { $match: { companyId, accountId: { $in: prospectIds } } },
       { $group: { _id: "$accountId", count: { $sum: 1 } } },
     ]);
     const countMap = {};
@@ -413,11 +418,11 @@ const icpService = {
 
     enrichedProspects.sort((a, b) => b.icpMatchScore - a.icpMatchScore);
 
-    const totalProspectsInDb = await Prospect.countDocuments({});
+    const totalProspectsInDb = await Prospect.countDocuments(companyFilter(companyId, {}));
     const matchRatio         = totalProspectsInDb > 0 ? total / totalProspectsInDb : 0;
     const shouldDiagnose     = total === 0 || matchRatio < 0.05;
     const diagnosis          = (shouldDiagnose && total === 0)
-      ? await buildMatchDiagnosis(profile)
+      ? await buildMatchDiagnosis(profile, companyId)
       : {};
 
     return {
@@ -437,10 +442,10 @@ const icpService = {
     };
   },
 
-  setBenchmark: async (id) => {
-    await ICP.updateMany({}, { isBenchmark: false });
+  setBenchmark: async (id, companyId) => {
+    await ICP.updateMany({ companyId }, { isBenchmark: false });
 
-    const profile = await icpRepository.update(id, { isBenchmark: true });
+    const profile = await icpRepository.update(id, { isBenchmark: true }, companyId);
     if (!profile) {
       const error = new Error("ICP profile not found");
       error.statusCode = 404;
@@ -449,21 +454,24 @@ const icpService = {
     return profile;
   },
 
-  getBenchmark: async () => {
-    return await ICP.findOne({ isBenchmark: true })
+  getBenchmark: async (companyId) => {
+    return await ICP.findOne({ isBenchmark: true, companyId })
       .populate("createdBy", "name email");
   },
 
   // ── Create segment from ICP matching prospects (one-click) ────────────────
-  createSegmentFromIcp: async (id, userId, options = {}) => {
-    const profile = await icpRepository.findById(id);
+  createSegmentFromIcp: async (id, userId, companyId, options = {}) => {
+    const profile = await icpRepository.findById(id, companyId);
     if (!profile) {
       const error = new Error("ICP profile not found");
       error.statusCode = 404;
       throw error;
     }
 
-    const filter = buildProspectMatchFilter(profile);
+    const icpFilter = buildProspectMatchFilter(profile);
+    const filter = Object.keys(icpFilter).length > 0
+      ? { $and: [companyFilter(companyId, {}), icpFilter] }
+      : companyFilter(companyId, {});
     const prospects = await Prospect.find(filter).select("_id").lean();
     const ids = prospects.map((p) => p._id);
 
@@ -487,6 +495,7 @@ const icpService = {
       name: options.name?.trim() || `${profile.name} — Segment`,
       description: profile.description || null,
       icpId: profile._id,
+      companyId,
       createdBy: userId,
       isShared: options.isShared ?? false,
       filters: {
@@ -502,13 +511,12 @@ const icpService = {
       enrichStatus: "pending",
     });
 
-    await segmentRepository.saveSnapshot(segment._id, ids);
-    return await segmentRepository.findById(segment._id);
+    await segmentRepository.saveSnapshot(segment._id, ids, companyId);
+    return await segmentRepository.findById(segment._id, companyId);
   },
 
-  // ── Buyer persona match ───────────────────────────────────────────────────
-  matchBuyerPersona: async (id, { page = 1, limit = 10 }) => {
-    const profile = await icpRepository.findById(id);
+  matchBuyerPersona: async (id, { page = 1, limit = 10, companyId }) => {
+    const profile = await icpRepository.findById(id, companyId);
     if (!profile) {
       const error = new Error("ICP profile not found");
       error.statusCode = 404;
@@ -527,7 +535,7 @@ const icpService = {
       throw error;
     }
 
-    const contactFilter = { isLinked: true };
+    const contactFilter = { companyId, isLinked: true };
 
     contactFilter.standardizedRoles = {
       $in: designations.map((d) => new RegExp(escapeRegex(d), "i")),

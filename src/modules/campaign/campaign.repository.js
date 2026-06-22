@@ -6,10 +6,11 @@ const campaignRepository = {
     return await Campaign.create(data);
   },
 
-  findAll: async ({ page = 1, limit = 10 }) => {
+  findAll: async ({ page = 1, limit = 10, createdByIds = null }) => {
     const skip = (page - 1) * limit;
+    const filter = createdByIds ? { createdBy: { $in: createdByIds } } : {};
     const [campaigns, total] = await Promise.all([
-      Campaign.find()
+      Campaign.find(filter)
         .populate("createdBy", "name email")
         .populate({
           path: "contactIds",
@@ -22,7 +23,7 @@ const campaignRepository = {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
-      Campaign.countDocuments(),
+      Campaign.countDocuments(filter),
     ]);
     return { campaigns, total };
   },

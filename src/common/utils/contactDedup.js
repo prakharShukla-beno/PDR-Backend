@@ -107,7 +107,7 @@ export const registerInFileRow = (row, tracker) => {
 };
 
 /** Fetch contacts from DB needed for dedup checks on a batch of rows */
-export const fetchExistingContactsForDedup = async (Contact, rows) => {
+export const fetchExistingContactsForDedup = async (Contact, rows, companyId) => {
   const emails = [...new Set(rows.map((r) => normEmail(r.email)).filter(Boolean))];
   const phones = [...new Set(rows.map((r) => r.primaryPhone).filter(Boolean))];
   const accountNames = [...new Set(rows.map((r) => r.accountName?.trim()).filter(Boolean))];
@@ -121,9 +121,17 @@ export const fetchExistingContactsForDedup = async (Contact, rows) => {
     });
   }
 
-  if (orConditions.length === 0) return [];
+  if (orConditions.length === 0) {
+    return Contact.find(companyId ? { companyId } : {})
+      .select("_id email firstName lastName standardizedRoles functionalDomain accountName primaryPhone linkedIn")
+      .lean();
+  }
 
-  return Contact.find({ $or: orConditions })
+  const filter = companyId
+    ? { companyId, $or: orConditions }
+    : { $or: orConditions };
+
+  return Contact.find(filter)
     .select("_id email firstName lastName standardizedRoles functionalDomain accountName primaryPhone linkedIn")
     .lean();
 };

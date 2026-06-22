@@ -4,6 +4,13 @@ import ICP                  from "../icp/icp.model.js";
 import { buildProspectMatchFilter } from "../icp/icp.service.js";
 import enrichmentService, { needsEnrichment } from "../enrichment/enrichment.service.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
+import { companyFilter } from "../../common/utils/tenantScope.js";
+
+const mergeCompanyQuery = (companyId, query = {}) => {
+  const base = companyFilter(companyId, {});
+  if (!query || Object.keys(query).length === 0) return base;
+  return { $and: [base, query] };
+};
 
 // ─── Region → Countries map (ICP region logic ke liye) ───────────────────────
 // APAC include karo + Pakistan exclude karo — yahi flow yahan handle hota hai
@@ -112,9 +119,10 @@ const segmentService = {
   },
 
   // ─── Create segment ──────────────────────────────────────────────────────
-  create: async (data, userId) => {
+  create: async (data, userId, companyId) => {
     const segment = await segmentRepository.create({
       ...data,
+      companyId,
       createdBy:         userId,
       matchedAccountIds: [],
       matchCount:        0,
@@ -125,79 +133,73 @@ const segmentService = {
     // ICP se bana tha? Toh ICP ka region logic use karo
     let icpProfile = null;
     if (data.icpId) {
-      icpProfile = await ICP.findById(data.icpId).lean();
+      icpProfile = await ICP.findOne({ _id: data.icpId, companyId }).lean();
     }
 
     const query = icpProfile
       ? buildProspectMatchFilter(icpProfile)
       : segmentService.buildQuery(data.filters || {}, null);
-    const prospects = await Prospect.find(query).select("_id").lean();
+    const prospects = await Prospect.find(mergeCompanyQuery(companyId, query)).select("_id").lean();
     const ids       = prospects.map(p => p._id);
-    await segmentRepository.saveSnapshot(segment._id, ids);
+    await segmentRepository.saveSnapshot(segment._id, ids, companyId);
 
-    return await segmentRepository.findById(segment._id);
+    return await segmentRepository.findById(segment._id, companyId);
   },
 
-  // ─── Get all segments ────────────────────────────────────────────────────
-  getAll: async (userId) => {
-    return await segmentRepository.findAll(userId);
+  getAll: async (userId, companyId) => {
+    return await segmentRepository.findAll(userId, companyId);
   },
 
-  // ─── Get single segment ──────────────────────────────────────────────────
-  getById: async (id) => {
-    return await segmentRepository.findById(id);
+  getById: async (id, companyId) => {
+    return await segmentRepository.findById(id, companyId);
   },
 
-  // ─── Update segment ──────────────────────────────────────────────────────
-  update: async (id, data) => {
-    await segmentRepository.update(id, data);
+  update: async (id, data, companyId) => {
+    await segmentRepository.update(id, data, companyId);
 
     if (data.filters) {
-      const segment    = await segmentRepository.findById(id);
+      const segment    = await segmentRepository.findById(id, companyId);
       let icpProfile   = null;
       if (segment?.icpId) {
-        icpProfile = await ICP.findById(segment.icpId).lean();
+        icpProfile = await ICP.findOne({ _id: segment.icpId, companyId }).lean();
       }
 
       const query = icpProfile
         ? buildProspectMatchFilter(icpProfile)
         : segmentService.buildQuery(data.filters, icpProfile);
-      const prospects = await Prospect.find(query).select("_id").lean();
+      const prospects = await Prospect.find(mergeCompanyQuery(companyId, query)).select("_id").lean();
       const ids       = prospects.map(p => p._id);
-      await segmentRepository.saveSnapshot(id, ids);
+      await segmentRepository.saveSnapshot(id, ids, companyId);
     }
 
-    return await segmentRepository.findById(id);
+    return await segmentRepository.findById(id, companyId);
   },
 
-  // ─── Delete segment ──────────────────────────────────────────────────────
-  delete: async (id) => {
-    return await segmentRepository.delete(id);
+  delete: async (id, companyId) => {
+    return await segmentRepository.delete(id, companyId);
   },
 
-  // ─── Sync — fresh query, update snapshot ─────────────────────────────────
-  sync: async (id) => {
-    const segment = await segmentRepository.findById(id);
+  sync: async (id, companyId) => {
+    const segment = await segmentRepository.findById(id, companyId);
     if (!segment) throw new Error("Segment not found");
 
     let icpProfile = null;
     if (segment.icpId) {
-      icpProfile = await ICP.findById(segment.icpId).lean();
+      icpProfile = await ICP.findOne({ _id: segment.icpId, companyId }).lean();
     }
 
     const query = icpProfile
       ? buildProspectMatchFilter(icpProfile)
       : segmentService.buildQuery(segment.filters, icpProfile);
-    const prospects = await Prospect.find(query).select("_id").lean();
+    const prospects = await Prospect.find(mergeCompanyQuery(companyId, query)).select("_id").lean();
     const ids       = prospects.map(p => p._id);
-    await segmentRepository.saveSnapshot(id, ids);
+    await segmentRepository.saveSnapshot(id, ids, companyId);
 
-    return await segmentRepository.findById(id);
+    return await segmentRepository.findById(id, companyId);
   },
 
-  // ─── Get stored accounts (paginated + tier breakdown) ────────────────────
-  getStoredAccounts: async (id, page = 1, limit = 10) => {
-    const segment = await segmentRepository.findById(id);
+  getStoredAccounts: async (id, page = 1, limit = 10, companyId) => {
+    const segment = await segmentRepository.findById(id, companyId);
     if (!segment) throw new Error("Segment not found");
 
     const total  = segment.matchedAccountIds.length;
@@ -213,7 +215,10 @@ const segmentService = {
       "strategicValue", "marginPotential",
     ].join(" ");
 
-    const prospectRows = await Prospect.find({ _id: { $in: pageIds } })
+    const prospectRows = await Prospect.find({
+      _id: { $in: pageIds },
+      companyId,
+    })
       .select(LIVE_ACCOUNT_FIELDS)
       .lean();
 
@@ -227,7 +232,7 @@ const segmentService = {
 
     // Tier breakdown — Tier A/B/C counts
     const tierAgg = await Prospect.aggregate([
-      { $match: { _id: { $in: segment.matchedAccountIds } } },
+      { $match: { companyId, _id: { $in: segment.matchedAccountIds } } },
       { $group: { _id: "$clvRanking", count: { $sum: 1 } } },
       { $sort:  { _id: 1 } },
     ]);
@@ -243,7 +248,7 @@ const segmentService = {
 
     // Priority breakdown
     const priorityAgg = await Prospect.aggregate([
-      { $match: { _id: { $in: segment.matchedAccountIds } } },
+      { $match: { companyId, _id: { $in: segment.matchedAccountIds } } },
       { $group: { _id: "$salesPriority", count: { $sum: 1 } } },
       { $sort:  { _id: 1 } },
     ]);
@@ -274,12 +279,13 @@ const segmentService = {
   },
 
   // ─── Preview — count + top 5 (bina save kiye) ────────────────────────────
-  preview: async (filters = {}) => {
+  preview: async (filters = {}, companyId) => {
     const query = segmentService.buildQuery(filters);
 
+    const scopedQuery = mergeCompanyQuery(companyId, query);
     const [count, topAccounts] = await Promise.all([
-      Prospect.countDocuments(query),
-      Prospect.find(query)
+      Prospect.countDocuments(scopedQuery),
+      Prospect.find(scopedQuery)
         .select("accountName primaryIndustry techFitScore finalScore salesPriority clvRanking country")
         .sort({ finalScore: -1, techFitScore: -1 })
         .limit(5)
@@ -293,8 +299,8 @@ const segmentService = {
   // Segment ke matched accounts pe Gemini enrichment chalaao
   // Phir Tech Fit score calculate karo ICP ke techStack se
   // Flow: pending → running → done/partial
-  enrichAndScore: async (segmentId, userId) => {
-    const segment = await segmentRepository.findById(segmentId);
+  enrichAndScore: async (segmentId, userId, companyId) => {
+    const segment = await segmentRepository.findById(segmentId, companyId);
     if (!segment) throw new Error("Segment not found");
 
     if (segment.enrichStatus === "running") {
@@ -304,14 +310,13 @@ const segmentService = {
     // ICP fetch — techStack ke liye
     let icpProfile = null;
     if (segment.icpId) {
-      icpProfile = await ICP.findById(segment.icpId).lean();
+      icpProfile = await ICP.findOne({ _id: segment.icpId, companyId }).lean();
     }
 
     const totalAccounts = segment.matchedAccountIds.length;
     if (totalAccounts === 0) throw new Error("No accounts in segment to enrich");
 
-    // Status running mark karo
-    await segmentRepository.update(segmentId, { enrichStatus: "running" });
+    await segmentRepository.update(segmentId, { enrichStatus: "running" }, companyId);
 
     // Background mein chalaao — response turant return ho
     // Actual enrichment async hota hai
@@ -324,6 +329,7 @@ const segmentService = {
         // Sirf segment ke accounts fetch karo
         const accounts = await Prospect.find({
           _id: { $in: segment.matchedAccountIds },
+          companyId,
         })
           .select(
             "_id primaryTechStack noOfEmployees intentSignal financialCapacity " +
@@ -465,20 +471,19 @@ const segmentService = {
           enrichedCount,
           scoredCount,
           lastEnrichedAt: new Date(),
-        });
+        }, companyId);
 
-        // Snapshot re-sync karo scored data ke saath
         const query = icpProfile
           ? buildProspectMatchFilter(icpProfile)
           : segmentService.buildQuery(segment.filters, icpProfile);
-        const prospects = await Prospect.find(query).select("_id").lean();
-        await segmentRepository.saveSnapshot(segmentId, prospects.map(p => p._id));
+        const prospects = await Prospect.find(mergeCompanyQuery(companyId, query)).select("_id").lean();
+        await segmentRepository.saveSnapshot(segmentId, prospects.map(p => p._id), companyId);
 
         console.log(`✅ Segment ${segmentId} enriched — ${scoredCount}/${totalAccounts} scored`);
 
       } catch (err) {
         console.error(`❌ Segment enrichment failed:`, err.message);
-        await segmentRepository.update(segmentId, { enrichStatus: "partial" });
+        await segmentRepository.update(segmentId, { enrichStatus: "partial" }, companyId);
       }
     });
 

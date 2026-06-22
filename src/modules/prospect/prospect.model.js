@@ -174,6 +174,11 @@ const prospectSchema = new mongoose.Schema(
     interactionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Interaction" }],
 
     // ── System ───────────────────────────────────────────────────────────────
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      default: null,
+    },
     isDuplicate: { type: Boolean, default: false },
     source: {
       type: String,
@@ -224,6 +229,10 @@ prospectSchema.pre("insertMany", function (next, docs) {
 
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
+prospectSchema.index({ companyId: 1 });
+prospectSchema.index({ companyId: 1, primaryIndustry: 1 });
+prospectSchema.index({ companyId: 1, clvRanking: 1 });
+prospectSchema.index({ companyId: 1, country: 1 });
 prospectSchema.index({ accountName: "text", website: "text" });
 prospectSchema.index({ accountName: 1 });
 prospectSchema.index({ accountNameLower: 1 });   // exact match ke liye

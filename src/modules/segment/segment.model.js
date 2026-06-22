@@ -21,6 +21,12 @@ const segmentSchema = new mongoose.Schema(
       default: false,
     },
 
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      default: null,
+    },
+
     // ICP reference — agar ICP se segment bana hai
     // ICP ke region/techStack filters yahan se use honge
     icpId: {
@@ -83,6 +89,7 @@ const segmentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+segmentSchema.index({ companyId: 1 });
 segmentSchema.index({ createdBy: 1 });
 segmentSchema.index({ isShared: 1 });
 segmentSchema.index({ icpId: 1 });          // ICP se segment dhundne ke liye

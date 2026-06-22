@@ -1,5 +1,6 @@
 import { validationResult } from "express-validator";
 import prospectService from "./prospect.service.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const prospectController = {
 
@@ -14,7 +15,8 @@ const prospectController = {
         });
       }
 
-      const { prospect, isDuplicate } = await prospectService.create(req.body, req.user._id);
+      const companyId = getCompanyIdFromRequest(req);
+      const { prospect, isDuplicate } = await prospectService.create(req.body, req.user._id, companyId);
 
       res.status(201).json({
         success: true,
@@ -30,7 +32,8 @@ const prospectController = {
   // GET /api/prospects — paginated list with filters
   getAll: async (req, res, next) => {
     try {
-      const result = await prospectService.getAll(req.query);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await prospectService.getAll(companyId, req.query);
       res.set("Cache-Control", "no-store, no-cache, must-revalidate");
       res.status(200).json({
         success:    true,
@@ -43,7 +46,8 @@ const prospectController = {
   // GET /api/prospects/:id — single prospect with all relations
   getById: async (req, res, next) => {
     try {
-      const prospect = await prospectService.getById(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const prospect = await prospectService.getById(req.params.id, companyId);
       res.status(200).json({ success: true, data: prospect });
     } catch (error) { next(error); }
   },
@@ -51,7 +55,8 @@ const prospectController = {
   // PUT /api/prospects/:id — update prospect fields
   update: async (req, res, next) => {
     try {
-      const updated = await prospectService.update(req.params.id, req.body);
+      const companyId = getCompanyIdFromRequest(req);
+      const updated = await prospectService.update(req.params.id, req.body, companyId);
       res.status(200).json({
         success: true,
         message: "Prospect updated successfully",
@@ -63,7 +68,8 @@ const prospectController = {
   // DELETE /api/prospects/:id — delete prospect
   delete: async (req, res, next) => {
     try {
-      const result = await prospectService.delete(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await prospectService.delete(req.params.id, companyId);
       res.status(200).json({ success: true, message: result.message });
     } catch (error) { next(error); }
   },
@@ -71,7 +77,8 @@ const prospectController = {
   // GET /api/prospects/export — download all prospects as Excel file
   export: async (req, res, next) => {
     try {
-      const { buffer, filename } = await prospectService.exportToExcel(req.query);
+      const companyId = getCompanyIdFromRequest(req);
+      const { buffer, filename } = await prospectService.exportToExcel(companyId, req.query);
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.send(buffer);
@@ -87,7 +94,8 @@ const prospectController = {
   //   - After AI enrichment (enrichment.service.js calls this automatically)
   calculateScore: async (req, res, next) => {
     try {
-      const result = await prospectService.calculateAndSaveScore(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await prospectService.calculateAndSaveScore(req.params.id, companyId);
 
       res.status(200).json({
         success: true,
@@ -116,7 +124,8 @@ const prospectController = {
   //   breakdown.financial = { points: 25, label: "Mid-Market" }
   getScoreBreakdown: async (req, res, next) => {
     try {
-      const result = await prospectService.getScoreBreakdown(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await prospectService.getScoreBreakdown(req.params.id, companyId);
       res.status(200).json({ success: true, data: result });
     } catch (error) { next(error); }
   },
@@ -126,7 +135,8 @@ const prospectController = {
   // Body: { clvRanking, salesPriority, overrideReason }
   overrideTier: async (req, res, next) => {
     try {
-      const updated = await prospectService.overrideTier(req.params.id, req.body);
+      const companyId = getCompanyIdFromRequest(req);
+      const updated = await prospectService.overrideTier(req.params.id, req.body, companyId);
       res.status(200).json({
         success: true,
         message: "Tier manually overridden",
@@ -141,7 +151,8 @@ const prospectController = {
   // Warning: slow on large datasets — runs one by one
   bulkReTier: async (req, res, next) => {
     try {
-      const results = await prospectService.bulkReTier();
+      const companyId = getCompanyIdFromRequest(req);
+      const results = await prospectService.bulkReTier(companyId);
       res.status(200).json({
         success: true,
         message: `Re-tier complete — ${results.success} updated, ${results.failed} failed`,
@@ -154,7 +165,8 @@ const prospectController = {
   // Returns recommended contact (if exists) or target role (if no contacts)
   suggestPoc: async (req, res, next) => {
     try {
-      const result = await prospectService.suggestPoc(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await prospectService.suggestPoc(req.params.id, companyId);
       res.status(200).json({ success: true, data: result });
     } catch (error) { next(error); }
   },
