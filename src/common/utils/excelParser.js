@@ -2,7 +2,7 @@ import pkg from "xlsx";
 import { INDUSTRIES } from "../constants/taxonomy.js";
 import { normalizeIndustryValue } from "./industryMapper.js";
 
-const { readFile, utils } = pkg;
+const { read, readFile, utils } = pkg;
 
 const FIELD_MAP = {
   // ── Account Information ────────────────────────────────────────────────────
@@ -220,11 +220,52 @@ const getFieldValue = (row, field) => {
   return row[field];
 };
 
-const parseExcel = (filePath) => {
+const PREVIEW_SAMPLE_ROWS = 5;
+
+const openFirstSheet = (filePath) => {
   const workbook = readFile(filePath);
   const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  return utils.sheet_to_json(sheet, { defval: null, raw: false });
+  return workbook.Sheets[sheetName];
+};
+
+const openFirstSheetFromBuffer = (buffer) => {
+  const workbook = read(buffer, { type: "buffer" });
+  const sheetName = workbook.SheetNames[0];
+  return workbook.Sheets[sheetName];
+};
+
+const readAllRawRows = (sheet) =>
+  utils.sheet_to_json(sheet, { defval: null, raw: false })
+    .filter((rawRow) => !isRowEmpty(rawRow));
+
+const getSheetRange = (sheet) =>
+  utils.decode_range(sheet["!ref"] || "A1:A1");
+
+const encodeRowRange = (sheet, startRow, endRow) => {
+  const full = getSheetRange(sheet);
+  return utils.encode_range({
+    s: { r: startRow, c: full.s.c },
+    e: { r: Math.min(endRow, full.e.r), c: full.e.c },
+  });
+};
+
+const parseExcel = (filePath) => {
+  const sheet = openFirstSheet(filePath);
+  return readAllRawRows(sheet);
+};
+
+const readSampleRawRows = (sheet, maxDataRows = PREVIEW_SAMPLE_ROWS) => {
+  const full = getSheetRange(sheet);
+  if (full.e.r < 1) return [];
+
+  const range = encodeRowRange(sheet, 0, Math.min(full.e.r, maxDataRows));
+  const rows = utils.sheet_to_json(sheet, { defval: null, raw: false, range });
+  return rows.filter((rawRow) => !isRowEmpty(rawRow));
+};
+
+const estimateTotalDataRows = (sheet) => {
+  const full = getSheetRange(sheet);
+  return Math.max(0, full.e.r);
 };
 
 const normalizeHeader = (header) =>
@@ -311,65 +352,32 @@ const inferAccountName = (rawRow, mapped) => {
 };
 
 const enrichContactFromAliases = (rawRow, contact) => {
-  const matchedHeaders = [];
-
   if (!contact.name) {
     const namePick = pickColumnByAliases(rawRow, CONTACT_NAME_HEADER_ALIASES);
-    if (namePick) {
-      contact.name = namePick.value;
-      matchedHeaders.push(namePick.header);
-    }
+    if (namePick) contact.name = namePick.value;
   }
 
   if (!contact.designation) {
     const desigPick = pickColumnByAliases(rawRow, DESIGNATION_HEADER_ALIASES);
-    if (desigPick) {
-      contact.designation = desigPick.value;
-      matchedHeaders.push(desigPick.header);
-    }
+    if (desigPick) contact.designation = desigPick.value;
   }
 
   // Client format: job1 / job2 as job-title fallbacks
-  if (!contact.designation && contact.job1) {
-    contact.designation = contact.job1;
-    matchedHeaders.push("job1");
-  }
-  if (!contact.designation && contact.job2) {
-    contact.designation = contact.job2;
-    matchedHeaders.push("job2");
-  }
+  if (!contact.designation && contact.job1) contact.designation = contact.job1;
+  if (!contact.designation && contact.job2) contact.designation = contact.job2;
 
   if (!contact.department) {
     const deptPick = pickColumnByAliases(rawRow, DEPARTMENT_HEADER_ALIASES);
-    if (deptPick) {
-      contact.department = deptPick.value;
-      matchedHeaders.push(deptPick.header);
-    }
+    if (deptPick) contact.department = deptPick.value;
   }
 
   if (!contact.seniority) {
     const senPick = pickColumnByAliases(rawRow, SENIORITY_HEADER_ALIASES);
-    if (senPick) {
-      contact.seniority = senPick.value;
-      matchedHeaders.push(senPick.header);
-    }
+    if (senPick) contact.seniority = senPick.value;
   }
 
   delete contact.job1;
   delete contact.job2;
-
-  if (
-    contact.name || contact.email || contact.phone ||
-    contact.designation || contact.department || contact.seniority
-  ) {
-    console.log("Parsed contact:", {
-      name: contact.name,
-      designation: contact.designation,
-      department: contact.department,
-      seniority: contact.seniority,
-      fromHeaders: matchedHeaders,
-    });
-  }
 
   return contact;
 };
@@ -600,21 +608,21 @@ export const detectMissingIcpColumns = (headers = []) => {
     if (!found) missingIcpColumns.push(field);
   }
 
-  console.log("Detected headers:", normalizedHeaders);
-  console.log("Missing columns:", missingIcpColumns);
-
   return missingIcpColumns;
 };
 
-export const getExcelHeaders = (filePath) => {
-  const workbook  = readFile(filePath);
-  const sheetName = workbook.SheetNames[0];
-  const sheet     = workbook.Sheets[sheetName];
-  const rows      = utils.sheet_to_json(sheet, { header: 1, defval: null, raw: false });
+const extractHeadersFromSheet = (sheet) => {
+  const headerRange = encodeRowRange(sheet, 0, 0);
+  const rows = utils.sheet_to_json(sheet, { header: 1, defval: null, raw: false, range: headerRange });
   const headerRow = rows[0] || [];
   return headerRow
     .filter((h) => h !== null && h !== undefined && String(h).trim() !== "")
     .map((h) => String(h));
+};
+
+export const getExcelHeaders = (filePath) => {
+  const sheet = openFirstSheet(filePath);
+  return extractHeadersFromSheet(sheet);
 };
 
 export const processExcelFile = (filePath) => {
@@ -642,21 +650,67 @@ export const processExcelFile = (filePath) => {
 };
 
 export const previewExcelFile = (filePath) => {
-  const headers           = getExcelHeaders(filePath);
+  const sheet = openFirstSheet(filePath);
+  const headers = extractHeadersFromSheet(sheet);
   const missingIcpColumns = detectMissingIcpColumns(headers);
-  const { validRows, totalRows, errorDetails } = processExcelFile(filePath);
+  const sampleRawRows = readSampleRawRows(sheet, PREVIEW_SAMPLE_ROWS);
+
+  const previewRows = [];
+  for (const rawRow of sampleRawRows) {
+    const mappedRow = sanitizeProspectRow(mapRowToSchema(rawRow));
+    const errors = validateRow(mappedRow, 0);
+    if (errors.length > 0) continue;
+
+    previewRows.push({
+      accountName:     mappedRow.accountName     || "",
+      primaryIndustry: mappedRow.primaryIndustry || "",
+      noOfEmployees:   mappedRow.noOfEmployees   || "",
+      annualRevenue:   mappedRow.annualRevenue   || "",
+      country:         mappedRow.country         || "",
+    });
+    if (previewRows.length >= PREVIEW_SAMPLE_ROWS) break;
+  }
 
   return {
     headers,
     missingIcpColumns,
-    previewRows: validRows.slice(0, 5).map((row) => ({
-      accountName:     row.accountName     || "",
-      primaryIndustry: row.primaryIndustry || "",
-      noOfEmployees:   row.noOfEmployees   || "",
-      annualRevenue:   row.annualRevenue   || "",
-      country:         row.country         || "",
-    })),
-    totalRows,
-    errorCount: errorDetails.length,
+    previewRows,
+    totalRows: estimateTotalDataRows(sheet),
+    errorCount: 0,
   };
+};
+
+/** Full parse from in-memory buffer — used by async import staging */
+export const parseExcelFile = (buffer) => {
+  const sheet = openFirstSheetFromBuffer(buffer);
+  const headers = extractHeadersFromSheet(sheet);
+  const rows = readAllRawRows(sheet);
+  return { rows, headers };
+};
+
+/** Validate + normalize a single raw Excel row (reuses existing mapping rules) */
+export const validateAndNormalizeRow = (rawRow, rowNumber = 2) => {
+  if (isRowEmpty(rawRow)) {
+    return { isValid: false, normalizedRow: null, reason: "Empty row" };
+  }
+
+  const mappedRow = sanitizeProspectRow(mapRowToSchema(rawRow));
+  const errors = validateRow(mappedRow, rowNumber);
+
+  if (errors.length > 0) {
+    return { isValid: false, normalizedRow: null, reason: errors[0] };
+  }
+
+  const { contacts, ...prospectData } = mappedRow;
+  return {
+    isValid: true,
+    normalizedRow: { ...prospectData, contacts },
+    reason: null,
+  };
+};
+
+/** Extract primary contact from a raw Excel row */
+export const buildContactFromRow = (rawRow) => {
+  const mappedRow = sanitizeProspectRow(mapRowToSchema(rawRow));
+  return mappedRow.contacts?.[0] ?? null;
 };

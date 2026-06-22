@@ -2,15 +2,12 @@ import Prospect from "./prospect.model.js";
 
 const prospectRepository = {
 
-  // Save new prospect to DB
   create: async (data) => {
     return await Prospect.create(data);
   },
 
-  // Bulk insert — for chunked inserts (e.g., 1000 rows per chunk)
   insertMany: async (rows, options = {}) => {
     try {
-      // Set accountNameLower manually — do not rely on model hooks
       const prepared = rows.map(r => ({
         ...r,
         accountNameLower: r.accountName
@@ -19,14 +16,13 @@ const prospectRepository = {
       }));
 
       const result = await Prospect.insertMany(prepared, {
-        ordered:        false,  // continue inserting remaining docs if one fails
-        rawResult:      true,   // raw result contains insertedCount
-        runValidators:  false, // imports may carry legacy/messy enum values
+        ordered:        false,
+        rawResult:      true,
+        runValidators:  false,
         ...options,
       });
       return result;
     } catch (err) {
-      // BulkWriteError — partial insert may have occurred
       if (err.name === "BulkWriteError" || err.result) {
         return err.result;
       }
@@ -34,7 +30,6 @@ const prospectRepository = {
     }
   },
 
-  // Get all prospects with pagination and filters
   findAll: async ({ filter = {}, page = 1, limit = 10, sort = { createdAt: -1 } }) => {
     const skip = (page - 1) * limit;
 
@@ -51,37 +46,31 @@ const prospectRepository = {
     return { prospects, total };
   },
 
-  // Get single prospect by ID
-  findById: async (id) => {
-    return await Prospect.findById(id)
+  findById: async (id, companyId) => {
+    const filter = companyId ? { _id: id, companyId } : { _id: id };
+    return await Prospect.findOne(filter)
       .populate("assignedTo", "name email")
       .populate("importLogId", "fileName status importType")
       .populate("campaignIds", "name status")
       .populate("interactionIds", "type outcome interactedAt");
   },
 
-  // Update prospect fields
-  update: async (id, data) => {
-    return await Prospect.findByIdAndUpdate(
-      id,
-      data,
-      { new: true, runValidators: true }
-    );
+  update: async (id, data, companyId) => {
+    const filter = companyId ? { _id: id, companyId } : { _id: id };
+    return await Prospect.findOneAndUpdate(filter, data, { new: true, runValidators: true });
   },
 
-  updateSkipValidation: async (id, data) => {
-    return await Prospect.findByIdAndUpdate(
-      id, data, { new: true, runValidators: false }
-    );
+  updateSkipValidation: async (id, data, companyId) => {
+    const filter = companyId ? { _id: id, companyId } : { _id: id };
+    return await Prospect.findOneAndUpdate(filter, data, { new: true, runValidators: false });
   },
 
-  // Permanently delete prospect
-  delete: async (id) => {
-    return await Prospect.findByIdAndDelete(id);
+  delete: async (id, companyId) => {
+    const filter = companyId ? { _id: id, companyId } : { _id: id };
+    return await Prospect.findOneAndDelete(filter);
   },
 
-  // Check duplicates by accountName or website
-  findDuplicates: async ({ accountName, website }) => {
+  findDuplicates: async ({ accountName, website, companyId }) => {
     const conditions = [];
 
     if (accountName) {
@@ -98,24 +87,28 @@ const prospectRepository = {
 
     if (conditions.length === 0) return [];
 
-    return await Prospect.find({ $or: conditions }).select(
-      "accountName website isDuplicate"
+    const filter = companyId
+      ? { companyId, $or: conditions }
+      : { $or: conditions };
+
+    return await Prospect.find(filter).select(
+      "accountName website isDuplicate companyId"
     );
   },
 
-  // Add campaignId to prospect's campaignIds array
-  addCampaign: async (prospectId, campaignId) => {
-    return await Prospect.findByIdAndUpdate(
-      prospectId,
+  addCampaign: async (prospectId, campaignId, companyId) => {
+    const filter = companyId ? { _id: prospectId, companyId } : { _id: prospectId };
+    return await Prospect.findOneAndUpdate(
+      filter,
       { $addToSet: { campaignIds: campaignId } },
       { new: true }
     );
   },
 
-  // Add interactionId to prospect's interactionIds array
-  addInteraction: async (prospectId, interactionId) => {
-    return await Prospect.findByIdAndUpdate(
-      prospectId,
+  addInteraction: async (prospectId, interactionId, companyId) => {
+    const filter = companyId ? { _id: prospectId, companyId } : { _id: prospectId };
+    return await Prospect.findOneAndUpdate(
+      filter,
       { $addToSet: { interactionIds: interactionId } },
       { new: true }
     );

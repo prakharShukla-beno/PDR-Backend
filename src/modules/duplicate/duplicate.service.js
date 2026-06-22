@@ -3,6 +3,7 @@ import prospectRepository from "../prospect/prospect.repository.js";
 import contactRepository from "../contacts/contact.repository.js";
 import Contact from "../contacts/contact.model.js";
 import auditLogService from "../auditLog/auditLog.service.js";
+import dashboardService from "../dashboard/dashboard.service.js";
 import {
   saveContactsForProspect,
 } from "../../common/utils/contactImportHelpers.js";
@@ -10,7 +11,7 @@ import { normEmail } from "../../common/utils/contactDedup.js";
 
 const duplicateService = {
 
-  getAll: async (query) => {
+  getAll: async (query, companyId) => {
     const { page = 1, limit = 10, status, type } = query;
     const filter = {};
     if (status) filter.status = status;
@@ -18,8 +19,11 @@ const duplicateService = {
     if (type === "import") filter.newData = { $ne: null };
     if (type === "manual") filter.prospectId2 = { $ne: null };
 
+    const companyScope = await dashboardService.getDuplicateCompanyFilter(companyId);
+    const scopedFilter = { $and: [filter, companyScope] };
+
     const { duplicates, total } = await duplicateRepository.findAll({
-      filter,
+      filter: scopedFilter,
       page:  Number(page),
       limit: Number(limit),
     });

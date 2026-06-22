@@ -1,6 +1,19 @@
 import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
+import Segment from "../segment/segment.model.js";
+import Campaign from "../campaign/campaign.model.js";
 import { expandSectors } from "../../common/utils/industryMapper.js";
+import { companyFilter, companyUserIds } from "../../common/utils/tenantScope.js";
+
+const RESULT_LIMIT_PER_TYPE = 5;
+
+const escapeRegex = (value) =>
+  value.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const contactDisplayName = (contact) => {
+  const full = [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim();
+  return full || contact.email || "Unnamed contact";
+};
 
 // ─── Helper: Build Include/Exclude filter ──────────────────────────────────
 // inc = ["Healthcare", "SaaS"]  → $in
@@ -29,7 +42,7 @@ const searchService = {
   // ACCOUNT SEARCH — Prospect Collection
   // Include/Exclude filters + various fields + pagination
   // ===========================================================================
-  searchProspects: async (query) => {
+  searchProspects: async (companyId, query) => {
     const {
       // Free text
       search,
@@ -67,7 +80,7 @@ const searchService = {
       sortOrder = "desc",
     } = query;
 
-    const filter = {};
+    const filter = companyFilter(companyId, {});
 
     // ── Free text search ─────────────────────────────────────────────────────
     if (search) {
@@ -146,7 +159,7 @@ const searchService = {
   // Apollo style — contact fields plus denormalized account fields
   // Supports include/exclude filters
   // ===========================================================================
-  searchContacts: async (query) => {
+  searchContacts: async (companyId, query) => {
     const {
       // Free text
       search,
@@ -184,7 +197,7 @@ const searchService = {
       sortOrder = "desc",
     } = query;
 
-    const filter = {};
+    const filter = companyFilter(companyId, {});
 
     // ── Free text search ─────────────────────────────────────────────────────
     if (search) {
@@ -263,7 +276,9 @@ const searchService = {
   // FILTER OPTIONS — for frontend dropdowns
   // Unique values from both collections
   // ===========================================================================
-  getFilterOptions: async () => {
+  getFilterOptions: async (companyId) => {
+    const prospectScope = companyFilter(companyId, {});
+    const contactScope = companyFilter(companyId, {});
     const [
       // Account filters
       industries, countries, cities, businessModels,
@@ -276,25 +291,25 @@ const searchService = {
       // Contact filters
       functionalDomains, contactCountries,
     ] = await Promise.all([
-      Prospect.distinct("primaryIndustry"),
-      Prospect.distinct("country"),
-      Prospect.distinct("hqLocationCity"),
-      Prospect.distinct("businessModel"),
-      Prospect.distinct("salesPriority"),
-      Prospect.distinct("clvRanking"),
-      Prospect.distinct("intentSignal"),
-      Prospect.distinct("noOfEmployees"),
-      Prospect.distinct("annualRevenue"),
-      Prospect.distinct("historyTrigger"),
-      Prospect.distinct("servicePitch"),
-      Prospect.distinct("strategicValue"),
-      Prospect.distinct("financialCapacity"),
-      Prospect.distinct("techAdoptionProfile"),
-      Prospect.distinct("infrastructureRisk"),
-      Prospect.distinct("accountSource"),
-      Prospect.distinct("commercialCategory"),
-      Contact.distinct("functionalDomain"),
-      Contact.distinct("country"),
+      Prospect.distinct("primaryIndustry", prospectScope),
+      Prospect.distinct("country", prospectScope),
+      Prospect.distinct("hqLocationCity", prospectScope),
+      Prospect.distinct("businessModel", prospectScope),
+      Prospect.distinct("salesPriority", prospectScope),
+      Prospect.distinct("clvRanking", prospectScope),
+      Prospect.distinct("intentSignal", prospectScope),
+      Prospect.distinct("noOfEmployees", prospectScope),
+      Prospect.distinct("annualRevenue", prospectScope),
+      Prospect.distinct("historyTrigger", prospectScope),
+      Prospect.distinct("servicePitch", prospectScope),
+      Prospect.distinct("strategicValue", prospectScope),
+      Prospect.distinct("financialCapacity", prospectScope),
+      Prospect.distinct("techAdoptionProfile", prospectScope),
+      Prospect.distinct("infrastructureRisk", prospectScope),
+      Prospect.distinct("accountSource", prospectScope),
+      Prospect.distinct("commercialCategory", prospectScope),
+      Contact.distinct("functionalDomain", contactScope),
+      Contact.distinct("country", contactScope),
     ]);
 
     const clean = (arr) => arr.filter(Boolean).sort();
@@ -322,6 +337,85 @@ const searchService = {
       // Contact
       functionalDomains:   clean(functionalDomains),
       contactCountries:    clean(contactCountries),
+    };
+  },
+
+  globalSearch: async (companyId, query) => {
+    if (!query || query.trim().length < 2) {
+      return { accounts: [], segments: [], campaigns: [], contacts: [] };
+    }
+
+    const regex = new RegExp(escapeRegex(query), "i");
+    const campaignCreators = await companyUserIds(companyId);
+
+    const [accounts, segments, campaigns, contacts] = await Promise.all([
+      Prospect.find(
+        companyFilter(companyId, {
+          $or: [{ accountName: regex }, { website: regex }],
+        })
+      )
+        .select("accountName website primaryIndustry clvRanking")
+        .limit(RESULT_LIMIT_PER_TYPE)
+        .lean(),
+
+      Segment.find(companyFilter(companyId, { name: regex }))
+        .select("name matchCount matchedAccountIds")
+        .limit(RESULT_LIMIT_PER_TYPE)
+        .lean(),
+
+      Campaign.find({
+        createdBy: { $in: campaignCreators },
+        name: regex,
+      })
+        .select("name status")
+        .limit(RESULT_LIMIT_PER_TYPE)
+        .lean(),
+
+      Contact.find(
+        companyFilter(companyId, {
+          $or: [
+            { firstName: regex },
+            { lastName: regex },
+            { email: regex },
+            { accountName: regex },
+            { standardizedRoles: regex },
+          ],
+        })
+      )
+        .select("firstName lastName email standardizedRoles accountName accountId")
+        .limit(RESULT_LIMIT_PER_TYPE)
+        .lean(),
+    ]);
+
+    return {
+      accounts: accounts.map((a) => ({
+        id: a._id,
+        type: "account",
+        title: a.accountName,
+        subtitle: a.website || a.primaryIndustry || "",
+        badge: a.clvRanking || null,
+      })),
+      segments: segments.map((s) => ({
+        id: s._id,
+        type: "segment",
+        title: s.name,
+        subtitle: `${s.matchCount ?? s.matchedAccountIds?.length ?? 0} accounts`,
+      })),
+      campaigns: campaigns.map((c) => ({
+        id: c._id,
+        type: "campaign",
+        title: c.name,
+        subtitle: c.status || "",
+      })),
+      contacts: contacts.map((c) => ({
+        id: c._id,
+        type: "contact",
+        title: contactDisplayName(c),
+        subtitle: c.standardizedRoles
+          ? `${c.standardizedRoles} at ${c.accountName || "Unknown"}`
+          : c.accountName || c.email || "",
+        accountId: c.accountId ? String(c.accountId) : null,
+      })),
     };
   },
 };

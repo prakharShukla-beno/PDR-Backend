@@ -1,11 +1,12 @@
 import segmentService from "./segment.service.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const segmentController = {
 
-  // POST /api/segments
   create: async (req, res, next) => {
     try {
-      const segment = await segmentService.create(req.body, req.user._id);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.create(req.body, req.user._id, companyId);
       res.status(201).json({
         success: true,
         message: "Segment created successfully",
@@ -14,10 +15,10 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // GET /api/segments
   getAll: async (req, res, next) => {
     try {
-      const segments = await segmentService.getAll(req.user._id);
+      const companyId = getCompanyIdFromRequest(req);
+      const segments = await segmentService.getAll(req.user._id, companyId);
       res.status(200).json({
         success: true,
         data: { segments, total: segments.length },
@@ -25,10 +26,10 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // GET /api/segments/:id
   getById: async (req, res, next) => {
     try {
-      const segment = await segmentService.getById(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.getById(req.params.id, companyId);
       if (!segment) {
         return res.status(404).json({ success: false, message: "Segment not found" });
       }
@@ -36,10 +37,10 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // PUT /api/segments/:id
   update: async (req, res, next) => {
     try {
-      const segment = await segmentService.update(req.params.id, req.body);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.update(req.params.id, req.body, companyId);
       res.status(200).json({
         success: true,
         message: "Segment updated successfully",
@@ -48,30 +49,30 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // DELETE /api/segments/:id
   delete: async (req, res, next) => {
     try {
-      await segmentService.delete(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      await segmentService.delete(req.params.id, companyId);
       res.status(200).json({ success: true, message: "Segment deleted successfully" });
     } catch (error) { next(error); }
   },
 
-  // GET /api/segments/:id/accounts — paginated stored accounts + tier breakdown
   getAccounts: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const { page = 1, limit = 10 } = req.query;
       const result = await segmentService.getStoredAccounts(
-        req.params.id, Number(page), Number(limit)
+        req.params.id, Number(page), Number(limit), companyId
       );
       res.set("Cache-Control", "no-store, no-cache, must-revalidate");
       res.status(200).json({ success: true, data: result });
     } catch (error) { next(error); }
   },
 
-  // POST /api/segments/:id/sync — fresh query, update snapshot
   sync: async (req, res, next) => {
     try {
-      const segment = await segmentService.sync(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.sync(req.params.id, companyId);
       res.status(200).json({
         success: true,
         message: `Synced — ${segment.matchCount} accounts found`,
@@ -80,10 +81,10 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // POST /api/segments/preview — live preview without saving
   preview: async (req, res, next) => {
     try {
-      const result = await segmentService.preview(req.body.filters || {});
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await segmentService.preview(req.body.filters || {}, companyId);
       res.status(200).json({ success: true, data: result });
     } catch (error) { next(error); }
   },
@@ -110,9 +111,11 @@ const segmentController = {
   // Background mein run hota hai — turant 202 return karta hai
   enrichAndScore: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const result = await segmentService.enrichAndScore(
         req.params.id,
-        req.user._id
+        req.user._id,
+        companyId
       );
       res.status(202).json({
         success: true,
@@ -120,7 +123,6 @@ const segmentController = {
         data:    result,
       });
     } catch (error) {
-      // Already running check
       if (error.message === "Enrichment already running for this segment") {
         return res.status(409).json({
           success: false,

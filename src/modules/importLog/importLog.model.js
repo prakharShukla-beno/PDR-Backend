@@ -17,6 +17,12 @@ const importLogSchema = new mongoose.Schema(
       ref: "User",
       required: [true, "Uploaded by user is required"],
     },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      required: true,
+      index: true,
+    },
     totalRows:    { type: Number, required: true, default: 0 },
     successCount: { type: Number, required: true, default: 0 },
     failedCount:  { type: Number, required: true, default: 0 },

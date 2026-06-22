@@ -1,12 +1,14 @@
 import duplicateService from "./duplicate.service.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const duplicateController = {
 
   // GET /api/duplicates — all duplicate pairs
   getAll: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const { page, limit, status } = req.query;
-      const result = await duplicateService.getAll({ page, limit, status });
+      const result = await duplicateService.getAll({ page, limit, status }, companyId);
       res.status(200).json({
         success: true,
         data:       result.duplicates,

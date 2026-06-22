@@ -2,13 +2,12 @@ import { Router } from "express";
 import { body } from "express-validator";
 import enrichmentController from "./enrichment.controller.js";
 import authMiddleware from "../../common/middlewares/auth.middleware.js";
+import { editorPlus, viewerPlus } from "../../common/middlewares/rbac.middleware.js";
 
 const router = Router();
 
-// All enrichment routes require login
 router.use(authMiddleware);
 
-// Bulk validation — prospectIds array required
 const bulkValidation = [
   body("prospectIds")
     .isArray({ min: 1 })
@@ -18,13 +17,8 @@ const bulkValidation = [
     .withMessage("Each prospectId must be a valid MongoDB ID"),
 ];
 
-// POST /api/enrichment/bulk   — MUST be before /:prospectId (specific before param)
-router.post("/bulk", bulkValidation, enrichmentController.enrichBulk);
-
-// POST /api/enrichment/:prospectId  — trigger single enrichment
-router.post("/:prospectId", enrichmentController.enrichOne);
-
-// GET  /api/enrichment/:prospectId  — get saved enrichment result
-router.get("/:prospectId", enrichmentController.getOne);
+router.post("/bulk",         editorPlus, bulkValidation, enrichmentController.enrichBulk);
+router.post("/:prospectId", editorPlus, enrichmentController.enrichOne);
+router.get("/:prospectId",  viewerPlus, enrichmentController.getOne);
 
 export default router;

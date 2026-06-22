@@ -1,6 +1,7 @@
 import { Router }        from "express";
 import segmentController from "./segment.controller.js";
 import authMiddleware    from "../../common/middlewares/auth.middleware.js";
+import { adminOnly, editorPlus, viewerPlus } from "../../common/middlewares/rbac.middleware.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -12,11 +13,10 @@ router.post("/:id/add-accounts",     segmentController.addAccounts);   // ← NE
 router.post("/:id/enrich-score",     segmentController.enrichAndScore);  // NEW
 router.get("/:id/accounts",          segmentController.getAccounts);
 
-// ── CRUD routes ───────────────────────────────────────────────────────────────
-router.post("/",   segmentController.create);
-router.get("/",    segmentController.getAll);
-router.get("/:id", segmentController.getById);
-router.put("/:id", segmentController.update);
-router.delete("/:id", segmentController.delete);
+router.post("/",   editorPlus,  segmentController.create);
+router.get("/",    viewerPlus,  segmentController.getAll);
+router.get("/:id", viewerPlus,  segmentController.getById);
+router.put("/:id", editorPlus,  segmentController.update);
+router.delete("/:id", adminOnly, segmentController.delete);
 
 export default router;

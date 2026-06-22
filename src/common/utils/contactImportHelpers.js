@@ -63,6 +63,7 @@ export const buildContactDocs = (row, prospect, importLogId, source = "account_i
     const { functionalDomain, keyFocusAreas } = resolveFunctionalDomain(contact.department);
 
     docs.push({
+      companyId:         prospect.companyId || null,
       accountId:         prospect._id,
       accountName:       prospect.accountName || row.accountName,
       isLinked:          true,

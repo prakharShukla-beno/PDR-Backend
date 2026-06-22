@@ -2,6 +2,7 @@ import prospectRepository from "./prospect.repository.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
 import Contact from "../contacts/contact.model.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
+import { companyFilter } from "../../common/utils/tenantScope.js";
 import pkg from "xlsx";
 const { utils, write } = pkg;
 
@@ -16,20 +17,21 @@ const buildIndustryFilter = (industry, primaryIndustry) => {
 const prospectService = {
 
   // Create prospect with automatic duplicate detection
-  create: async (data, userId) => {
+  create: async (data, userId, companyId) => {
     const existing = await prospectRepository.findDuplicates({
       accountName: data.accountName,
       website:     data.website,
+      companyId,
     });
 
     const isDuplicate = existing.length > 0;
 
     const prospect = await prospectRepository.create({
       ...data,
+      companyId,
       isDuplicate,
       source: data.source || "excel",
     });
-
     // Log duplicate pair for review
     if (isDuplicate) {
       const matchFields = [];
@@ -48,7 +50,7 @@ const prospectService = {
   },
 
   // Get paginated prospects with filters and sorting
-  getAll: async (query) => {
+  getAll: async (companyId, query) => {
     const {
       page = 1, limit = 10, search,
       industry, primaryIndustry, country, salesPriority,
@@ -56,7 +58,7 @@ const prospectService = {
       sortBy = "createdAt", sortOrder = "desc",
     } = query;
 
-    const filter = {};
+    const filter = companyFilter(companyId, {});
 
     if (search) {
       filter.$or = [
@@ -92,8 +94,8 @@ const prospectService = {
   },
 
   // Get single prospect by ID
-  getById: async (id) => {
-    const prospect = await prospectRepository.findById(id);
+  getById: async (id, companyId) => {
+    const prospect = await prospectRepository.findById(id, companyId);
     if (!prospect) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
@@ -103,25 +105,24 @@ const prospectService = {
   },
 
   // Update prospect fields
-  update: async (id, data) => {
-    const exists = await prospectRepository.findById(id);
+  update: async (id, data, companyId) => {
+    const exists = await prospectRepository.findById(id, companyId);
     if (!exists) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
       throw error;
     }
-    return await prospectRepository.update(id, data);
+    return await prospectRepository.update(id, data, companyId);
   },
 
-  // Delete prospect permanently
-  delete: async (id) => {
-    const exists = await prospectRepository.findById(id);
+  delete: async (id, companyId) => {
+    const exists = await prospectRepository.findById(id, companyId);
     if (!exists) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
       throw error;
     }
-    await prospectRepository.delete(id);
+    await prospectRepository.delete(id, companyId);
     return { message: "Prospect deleted successfully" };
   },
 
@@ -139,8 +140,8 @@ const prospectService = {
   //   finalScore     → the calculated number (0-108 range)
   //   clvRanking     → Tier-A / Tier-B / Tier-C
   //   salesPriority  → P1 / P2 / P3 / P4 / null
-  calculateAndSaveScore: async (prospectId) => {
-    const prospect = await prospectRepository.findById(prospectId);
+  calculateAndSaveScore: async (prospectId, companyId) => {
+    const prospect = await prospectRepository.findById(prospectId, companyId);
     if (!prospect) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
@@ -156,16 +157,15 @@ const prospectService = {
       finalScore:    result.finalScore,
       clvRanking:    result.clvRanking,
       salesPriority: result.salesPriority,
-    });
-
+    }, companyId);
     return result;
   },
 
   // ── NEW: Get score breakdown for one prospect (read-only, no DB save) ────────
   // Used by the frontend scoring tab to show how the score was calculated
   // Returns step-by-step breakdown: formula, each component value
-  getScoreBreakdown: async (prospectId) => {
-    const prospect = await prospectRepository.findById(prospectId);
+  getScoreBreakdown: async (prospectId, companyId) => {
+    const prospect = await prospectRepository.findById(prospectId, companyId);
     if (!prospect) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
@@ -197,8 +197,8 @@ const prospectService = {
   // Sometimes a salesperson knows better than the formula
   // e.g. "This is a strategic client even though score is low"
   // overrideReason is saved so team knows why it was manually changed
-  overrideTier: async (prospectId, { clvRanking, salesPriority, overrideReason }) => {
-    const prospect = await prospectRepository.findById(prospectId);
+  overrideTier: async (prospectId, { clvRanking, salesPriority, overrideReason }, companyId) => {
+    const prospect = await prospectRepository.findById(prospectId, companyId);
     if (!prospect) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
@@ -210,19 +210,13 @@ const prospectService = {
     if (salesPriority) updateData.salesPriority = salesPriority;
     if (overrideReason) updateData.comments = `[Manual Override] ${overrideReason}`;
 
-    return await prospectRepository.update(prospectId, updateData);
+    return await prospectRepository.update(prospectId, updateData, companyId);
   },
 
-  // ── NEW: Bulk re-tier all prospects ─────────────────────────────────────────
-  // Runs calculateAndSaveScore on every prospect in the DB
-  // Used when: scoring formula changes, or "Re-Tier All" button clicked
-  // Processes one by one to avoid memory issues with large datasets
-  bulkReTier: async () => {
-    // Get all prospects without pagination limit
+  bulkReTier: async (companyId) => {
     const { prospects } = await prospectRepository.findAll({
-      filter: {}, page: 1, limit: 999999, sort: { createdAt: -1 },
+      filter: companyFilter(companyId, {}), page: 1, limit: 999999, sort: { createdAt: -1 },
     });
-
     const results = { success: 0, failed: 0, errors: [] };
 
     for (const prospect of prospects) {
@@ -233,7 +227,7 @@ const prospectService = {
           finalScore:    result.finalScore,
           clvRanking:    result.clvRanking,
           salesPriority: result.salesPriority,
-        });
+        }, companyId);
         results.success++;
       } catch (err) {
         results.failed++;
@@ -247,9 +241,8 @@ const prospectService = {
   // ── Suggest POC via Gemini AI ─────────────────────────────────────────────
   // Scenario 1: contacts exist → pick best match based on ICP buyer persona
   // Scenario 2: no contacts   → suggest target role + LinkedIn search tip
-  suggestPoc: async (prospectId) => {
-    // Get prospect data
-    const prospect = await prospectRepository.findById(prospectId);
+  suggestPoc: async (prospectId, companyId) => {
+    const prospect = await prospectRepository.findById(prospectId, companyId);
     if (!prospect) {
       const err = new Error("Prospect not found");
       err.statusCode = 404;
@@ -257,7 +250,7 @@ const prospectService = {
     }
 
     // Fetch all contacts linked to this account
-    const contacts = await Contact.find({ accountId: prospectId })
+    const contacts = await Contact.find({ accountId: prospectId, companyId })
       .select("firstName lastName email standardizedRoles functionalDomain isPrimary")
       .lean();
 
@@ -358,11 +351,16 @@ ${contacts.length > 0
 
   // Export all matching prospects to Excel file — FR-2.2
   // Supports same filters as getAll, no pagination limit
-  exportToExcel: async (query) => {
+  exportToExcel: async (companyId, query) => {
     const { search, industry, primaryIndustry, country, salesPriority, clvRanking, businessModel } = query;
 
-    const filter = {};
-    if (search)          filter.$or            = [{ accountName: { $regex: search, $options: "i" } }, { website: { $regex: search, $options: "i" } }];
+    const filter = companyFilter(companyId, {});
+    if (search) {
+      filter.$or = [
+        { accountName: { $regex: search, $options: "i" } },
+        { website: { $regex: search, $options: "i" } },
+      ];
+    }
     const industryFilter = buildIndustryFilter(industry, primaryIndustry);
     if (industryFilter)  filter.primaryIndustry = industryFilter;
     if (country)         filter.country         = { $regex: country, $options: "i" };
@@ -377,7 +375,7 @@ ${contacts.length > 0
 
     const prospectIds = prospects.map((p) => p._id);
     const contacts = prospectIds.length > 0
-      ? await Contact.find({ accountId: { $in: prospectIds } })
+      ? await Contact.find({ accountId: { $in: prospectIds }, companyId })
           .sort({ isPrimary: -1, createdAt: 1 })
           .lean()
       : [];

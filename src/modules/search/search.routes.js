@@ -5,6 +5,9 @@ import authMiddleware from "../../common/middlewares/auth.middleware.js";
 const router = Router();
 router.use(authMiddleware);
 
+// GET /api/search?q=amazon — global search across accounts, segments, campaigns, contacts
+router.get("/", searchController.globalSearch);
+
 // GET /api/search/prospects?industryInclude[]=Healthcare&countryExclude[]=India
 router.get("/prospects", searchController.searchProspects);
 

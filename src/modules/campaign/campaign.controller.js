@@ -1,12 +1,14 @@
 import { validationResult } from "express-validator";
 import campaignService from "./campaign.service.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const campaignController = {
 
   // Get all campaigns with pagination
   getAll: async (req, res, next) => {
     try {
-      const result = await campaignService.getAll(req.query);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await campaignService.getAll(req.query, companyId);
       res.status(200).json({
         success: true,
         data: result.campaigns,

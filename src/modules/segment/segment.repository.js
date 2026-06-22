@@ -1,41 +1,41 @@
 import Segment from "./segment.model.js";
 
+const scopedFilter = (id, companyId) =>
+  companyId ? { _id: id, companyId } : { _id: id };
+
 const segmentRepository = {
 
-  // Create new segment
   create: async (data) => {
     return await Segment.create(data);
   },
 
-  // Get all segments visible to user — own + shared
-  findAll: async (userId) => {
-    return await Segment.find({
+  findAll: async (userId, companyId) => {
+    const filter = {
       $or: [{ createdBy: userId }, { isShared: true }],
-    })
+    };
+    if (companyId) filter.companyId = companyId;
+
+    return await Segment.find(filter)
       .populate("createdBy", "name email")
       .sort({ createdAt: -1 });
   },
 
-  // Get single segment — populate account IDs for detail page
-  findById: async (id) => {
-    return await Segment.findById(id)
+  findById: async (id, companyId) => {
+    return await Segment.findOne(scopedFilter(id, companyId))
       .populate("createdBy", "name email");
   },
 
-  // Update any segment fields
-  update: async (id, data) => {
-    return await Segment.findByIdAndUpdate(id, data, { new: true });
+  update: async (id, data, companyId) => {
+    return await Segment.findOneAndUpdate(scopedFilter(id, companyId), data, { new: true });
   },
 
-  // Delete segment permanently
-  delete: async (id) => {
-    return await Segment.findByIdAndDelete(id);
+  delete: async (id, companyId) => {
+    return await Segment.findOneAndDelete(scopedFilter(id, companyId));
   },
 
-  // Save snapshot — store matched account IDs + count + sync time
-  saveSnapshot: async (id, matchedIds) => {
-    return await Segment.findByIdAndUpdate(
-      id,
+  saveSnapshot: async (id, matchedIds, companyId) => {
+    return await Segment.findOneAndUpdate(
+      scopedFilter(id, companyId),
       {
         matchedAccountIds: matchedIds,
         matchCount:        matchedIds.length,

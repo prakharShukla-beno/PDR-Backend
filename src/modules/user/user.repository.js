@@ -19,7 +19,7 @@ const userRepository = {
   updateLastLogin: async (userId) => {
     return await User.findByIdAndUpdate(
       userId,
-      { lastLogin: new Date() },
+      { lastLoginAt: new Date() },
       { new: true }
     );
   },

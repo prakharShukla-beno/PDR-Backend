@@ -1,5 +1,6 @@
 import contactImportService from "./contactImport.service.js";
 import importLogRepository from "../importLog/importLog.repository.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const contactImportController = {
 
@@ -25,7 +26,11 @@ const contactImportController = {
       const userId   = req.user._id;
 
       // Wait for result — duplicates need user decision
-      const result = await contactImportService.processContactImport(filePath, userId);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await contactImportService.processContactImport(filePath, {
+        userId: req.user._id,
+        companyId,
+      });
 
       return res.status(200).json({
         success: true,
@@ -53,10 +58,12 @@ const contactImportController = {
         });
       }
 
+      const companyId = getCompanyIdFromRequest(req);
       const result = await contactImportService.resolveContactDuplicates({
         importLogId,
         decisions,
         userId: req.user._id,
+        companyId,
       });
 
       return res.status(200).json({
@@ -73,9 +80,9 @@ const contactImportController = {
   // GET /api/import/contacts/status/:importLogId
   getStatus: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const status = await importLogRepository.findById(req.params.importLogId);
-
-      if (!status) {
+      if (!status || status.companyId?.toString() !== companyId?.toString()) {
         return res.status(404).json({ success: false, message: "Import log not found" });
       }
 

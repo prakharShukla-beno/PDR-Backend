@@ -62,7 +62,7 @@ const contactImportService = {
   // Save non-duplicates and return duplicates to the user for review
   // Duplicate = email OR phone OR (firstName + lastName + accountName) match
   // ==========================================================================
-  processContactImport: async (filePath, userId) => {
+  processContactImport: async (filePath, { userId, companyId }) => {
 
     const { validRows, errorDetails, totalRows } = processContactFile(filePath);
 
@@ -72,6 +72,7 @@ const contactImportService = {
       fileName:     filePath.split(/[\\\/]/).pop(),
       importType:   "excel",
       uploadedBy:   userId,
+      companyId,
       totalRows,
       successCount: 0,
       failedCount:  errorDetails.length,
@@ -91,6 +92,7 @@ const contactImportService = {
 
     if (uniqueAccountNames.length > 0) {
       const accounts = await Prospect.find({
+        companyId,
         accountNameLower: { $in: uniqueAccountNames.map(n => n.toLowerCase()) },
       }).select("_id accountName accountNameLower primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal website").lean();
 
@@ -107,6 +109,7 @@ const contactImportService = {
 
       return {
         ...row,
+        companyId,
         accountId:   prospect ? prospect._id : null,
         accountName: row.accountName?.trim() || null,
         isLinked:    !!prospect,
@@ -116,7 +119,7 @@ const contactImportService = {
       };
     });
 
-    const existingContacts = await fetchExistingContactsForDedup(Contact, preparedRows);
+    const existingContacts = await fetchExistingContactsForDedup(Contact, preparedRows, companyId);
     const dedupIndexes     = buildContactDedupIndexes(existingContacts);
     const fileTracker      = createInFileDedupTracker();
 
@@ -263,7 +266,7 @@ const contactImportService = {
   // RESOLVE CONTACT DUPLICATES — Step 2
   // Actions: merge | skip | keep_both
   // ==========================================================================
-  resolveContactDuplicates: async ({ importLogId, decisions, userId }) => {
+  resolveContactDuplicates: async ({ importLogId, decisions, userId, companyId }) => {
     const results = { merged: 0, skipped: 0, kept_both: 0, errors: [] };
 
     for (const decision of decisions) {
@@ -274,7 +277,7 @@ const contactImportService = {
           results.skipped++;
 
         } else if (action === "merge") {
-          const existingContact = await Contact.findById(existingId).lean();
+          const existingContact = await Contact.findOne({ _id: existingId, companyId }).lean();
           if (!existingContact) {
             results.errors.push({ existingId, action, error: "Existing contact not found" });
             continue;
@@ -296,14 +299,14 @@ const contactImportService = {
           }
 
           if (Object.keys(updateData).length > 0) {
-            await Contact.findByIdAndUpdate(existingId, { $set: updateData });
+            await Contact.findOneAndUpdate({ _id: existingId, companyId }, { $set: updateData });
           }
 
           results.merged++;
 
         } else if (action === "keep_both") {
           const { _id, ...newContactData } = newData;
-          await Contact.create({ ...newContactData, importLogId });
+          await Contact.create({ ...newContactData, companyId, importLogId });
           results.kept_both++;
         }
 

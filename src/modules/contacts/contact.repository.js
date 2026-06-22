@@ -1,22 +1,23 @@
 import Contact from "./contact.model.js";
 
+const scopedFilter = (id, companyId) =>
+  companyId ? { _id: id, companyId } : { _id: id };
+
 const contactRepository = {
 
   create: async (data) => {
     return await Contact.create(data);
   },
 
-  // Bulk insert — error handling added to support large batches
   insertMany: async (rows, options = {}) => {
     try {
       const result = await Contact.insertMany(rows, {
-        ordered:   false,  // ek fail hone pe baki insert hote rahe
+        ordered:   false,
         rawResult: true,
         ...options,
       });
       return result;
     } catch (err) {
-      // BulkWriteError — partial insert may have occurred; do not crash
       if (err.name === "BulkWriteError" || err.result) {
         return err.result;
       }
@@ -38,49 +39,50 @@ const contactRepository = {
     return { contacts, total };
   },
 
-  findById: async (id) => {
-    return await Contact.findById(id)
+  findById: async (id, companyId) => {
+    return await Contact.findOne(scopedFilter(id, companyId))
       .populate("accountId", "accountName website primaryIndustry country salesPriority")
       .populate("campaignIds", "name status")
       .populate("importLogId", "fileName status");
   },
 
-  update: async (id, data) => {
-    return await Contact.findByIdAndUpdate(id, data, {
+  update: async (id, data, companyId) => {
+    return await Contact.findOneAndUpdate(scopedFilter(id, companyId), data, {
       new: true, runValidators: true,
     });
   },
 
-  // Bulk update — used for auto-linking contacts to accounts
   updateMany: async (filter, update) => {
     return await Contact.updateMany(filter, update);
   },
 
-  delete: async (id) => {
-    return await Contact.findByIdAndDelete(id);
+  delete: async (id, companyId) => {
+    return await Contact.findOneAndDelete(scopedFilter(id, companyId));
   },
 
-  findByAccountId: async (accountId) => {
-    return await Contact.find({ accountId })
+  findByAccountId: async (accountId, companyId) => {
+    const filter = companyId ? { accountId, companyId } : { accountId };
+    return await Contact.find(filter)
       .populate("campaignIds", "name status")
       .sort({ isPrimary: -1, createdAt: -1 });
   },
 
-  countByAccountId: async (accountId) => {
-    return await Contact.countDocuments({ accountId });
+  countByAccountId: async (accountId, companyId) => {
+    const filter = companyId ? { accountId, companyId } : { accountId };
+    return await Contact.countDocuments(filter);
   },
 
-  addCampaign: async (contactId, campaignId) => {
-    return await Contact.findByIdAndUpdate(
-      contactId,
+  addCampaign: async (contactId, campaignId, companyId) => {
+    return await Contact.findOneAndUpdate(
+      scopedFilter(contactId, companyId),
       { $addToSet: { campaignIds: campaignId } },
       { new: true }
     );
   },
 
-  removeCampaign: async (contactId, campaignId) => {
-    return await Contact.findByIdAndUpdate(
-      contactId,
+  removeCampaign: async (contactId, campaignId, companyId) => {
+    return await Contact.findOneAndUpdate(
+      scopedFilter(contactId, companyId),
       { $pull: { campaignIds: campaignId } },
       { new: true }
     );

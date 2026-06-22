@@ -2,6 +2,7 @@ import Campaign from "./campaign.model.js";
 import campaignRepository from "./campaign.repository.js";
 import contactRepository from "../contacts/contact.repository.js";
 import auditLogService from "../auditLog/auditLog.service.js";
+import { companyUserIds } from "../../common/utils/tenantScope.js";
 
 const campaignService = {
 
@@ -26,11 +27,13 @@ const campaignService = {
   },
 
   // ── Get All ──────────────────────────────────────────────────────────────────
-  getAll: async (query) => {
+  getAll: async (query, companyId) => {
     const { page = 1, limit = 10 } = query;
+    const createdByIds = await companyUserIds(companyId);
     const { campaigns, total } = await campaignRepository.findAll({
       page:  Number(page),
       limit: Number(limit),
+      createdByIds,
     });
     return {
       campaigns,
