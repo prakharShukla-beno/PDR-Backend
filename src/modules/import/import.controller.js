@@ -1,8 +1,71 @@
 import importService from "./import.service.js";
+import ImportJob from "./importJob.model.js";
+import StagedRow from "./stagedRow.model.js";
+import { parseExcelFile, detectMissingIcpColumns } from "../../common/utils/excelParser.js";
+import { processImportJob, cancelImportJobIfRequested, parseExcelFileWithCancel } from "./importJob.processor.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
+
+const STAGE_BATCH = 2000;
+const ACTIVE_STATUSES = ["pending", "parsing", "processing"];
+
+const runAsyncImport = async (jobId, fileBuffer, companyId, userId) => {
+  try {
+    await ImportJob.findByIdAndUpdate(jobId, {
+      status: "parsing",
+      startedAt: new Date(),
+    });
+
+    if (await cancelImportJobIfRequested(jobId)) return;
+
+    const parsed = await parseExcelFileWithCancel(jobId, fileBuffer, parseExcelFile);
+    if (!parsed) return;
+
+    const { rows, headers } = parsed;
+    const missingColumns = detectMissingIcpColumns(headers);
+
+    if (await cancelImportJobIfRequested(jobId)) return;
+
+    await ImportJob.findByIdAndUpdate(jobId, {
+      totalRows: rows.length,
+      missingIcpColumns: missingColumns,
+    });
+
+    const stagedDocs = rows.map((row, index) => ({
+      jobId,
+      rowIndex: index,
+      rawData: row,
+      processed: false,
+    }));
+
+    for (let i = 0; i < stagedDocs.length; i += STAGE_BATCH) {
+      if (await cancelImportJobIfRequested(jobId)) return;
+
+      await StagedRow.insertMany(
+        stagedDocs.slice(i, i + STAGE_BATCH),
+        { ordered: false }
+      );
+    }
+
+    if (await cancelImportJobIfRequested(jobId)) return;
+
+    await ImportJob.findByIdAndUpdate(jobId, { status: "processing" });
+    await processImportJob(jobId, companyId, userId);
+  } catch (err) {
+    const existing = await ImportJob.findById(jobId).select("status").lean();
+    if (existing?.status === "cancelled") return;
+
+    console.error(`Import job ${jobId} failed:`, err);
+    await StagedRow.deleteMany({ jobId });
+    await ImportJob.findByIdAndUpdate(jobId, {
+      status: "failed",
+      errorMessage: err.message,
+      completedAt: new Date(),
+    });
+  }
+};
 
 const importController = {
 
-  // POST /api/import/excel/preview — parse headers, detect missing ICP columns
   previewExcel: async (req, res, next) => {
     try {
       if (!req.file) {
@@ -30,8 +93,6 @@ const importController = {
     }
   },
 
-  // POST /api/import/excel
-  // Upload file — save non-duplicates and return duplicates to the user
   uploadExcel: async (req, res, next) => {
     try {
       if (!req.file) {
@@ -49,10 +110,11 @@ const importController = {
       }
 
       const filePath = req.file.path;
-      const userId   = req.user._id;
-
-      // Wait for result — duplicates require a user decision
-      const result = await importService.processExcelImport(filePath, userId);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await importService.processExcelImport(filePath, {
+        userId: req.user._id,
+        companyId,
+      });
 
       return res.status(200).json({
         success: true,
@@ -67,8 +129,144 @@ const importController = {
     }
   },
 
-  // POST /api/import/resolve-duplicates
-  // Process user decisions — merge / skip / keep_both
+  importExcelAsync: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const userId = req.user._id ?? req.user.id;
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No file uploaded. Please upload an Excel file.",
+        });
+      }
+
+      if (!req.file.originalname.match(/\.(xlsx|xls|csv)$/i)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid file type. Only .xlsx, .xls and .csv files are allowed.",
+        });
+      }
+
+      const job = await ImportJob.create({
+        companyId,
+        createdBy: userId,
+        fileName: req.file.originalname,
+        status: "pending",
+      });
+
+      const fileBuffer = Buffer.from(req.file.buffer);
+
+      res.status(202).json({
+        success: true,
+        message: "Import queued for processing",
+        data: {
+          jobId: job._id,
+          status: job.status,
+        },
+      });
+
+      setImmediate(() => {
+        runAsyncImport(job._id, fileBuffer, companyId, userId);
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getImportJobStatus: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const job = await ImportJob.findOne({
+        _id: req.params.jobId,
+        companyId,
+      }).lean();
+
+      if (!job) {
+        return res.status(404).json({
+          success: false,
+          message: "Import job not found",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: job,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getImportJobs: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const jobs = await ImportJob.find({ companyId })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        data: jobs,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  cancelImportJob: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const job = await ImportJob.findOneAndUpdate(
+        {
+          _id: req.params.jobId,
+          companyId,
+          status: { $in: ACTIVE_STATUSES },
+        },
+        {
+          $set: {
+            cancelRequested: true,
+            status: "cancelled",
+            completedAt: new Date(),
+          },
+        },
+        { new: true }
+      );
+
+      if (!job) {
+        const existing = await ImportJob.findOne({
+          _id: req.params.jobId,
+          companyId,
+        }).select("status").lean();
+
+        if (!existing) {
+          return res.status(404).json({
+            success: false,
+            message: "Import job not found",
+          });
+        }
+
+        return res.status(400).json({
+          success: false,
+          message: "This import has already finished and can't be cancelled",
+        });
+      }
+
+      await StagedRow.deleteMany({ jobId: job._id, processed: false });
+
+      console.log(`Import job ${job._id} cancelled via API`);
+
+      return res.status(200).json({
+        success: true,
+        message: "Import cancelled",
+        data: job,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   resolveDuplicates: async (req, res, next) => {
     try {
       const { importLogId, decisions } = req.body;
@@ -80,10 +278,12 @@ const importController = {
         });
       }
 
+      const companyId = getCompanyIdFromRequest(req);
       const result = await importService.resolveDuplicates({
         importLogId,
         decisions,
         userId: req.user._id,
+        companyId,
       });
 
       return res.status(200).json({
@@ -97,11 +297,11 @@ const importController = {
     }
   },
 
-  // GET /api/import/status/:importLogId
   getStatus: async (req, res, next) => {
     try {
       const { importLogId } = req.params;
-      const status = await importService.getImportStatus(importLogId);
+      const companyId = getCompanyIdFromRequest(req);
+      const status = await importService.getImportStatus(importLogId, companyId);
 
       if (!status) {
         return res.status(404).json({

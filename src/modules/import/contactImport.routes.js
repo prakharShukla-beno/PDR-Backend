@@ -5,12 +5,12 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import contactImportController from "./contactImport.controller.js";
 import authMiddleware from "../../common/middlewares/auth.middleware.js";
+import { editorPlus, viewerPlus } from "../../common/middlewares/rbac.middleware.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const uploadDir  = path.join(__dirname, "../../../uploads");
 
-// Ensure uploads directory exists
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -40,13 +40,8 @@ const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 102
 const router = Router();
 router.use(authMiddleware);
 
-// Upload contact file
-router.post("/", upload.single("file"), contactImportController.uploadFile);
-
-// Resolve duplicate contacts
-router.post("/resolve-duplicates", contactImportController.resolveDuplicates);
-
-// Check import status
-router.get("/status/:importLogId", contactImportController.getStatus);
+router.post("/",                   editorPlus, upload.single("file"), contactImportController.uploadFile);
+router.post("/resolve-duplicates", editorPlus, contactImportController.resolveDuplicates);
+router.get("/status/:importLogId", viewerPlus, contactImportController.getStatus);
 
 export default router;

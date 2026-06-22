@@ -5,12 +5,12 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import importController from "./import.controller.js";
 import authMiddleware from "../../common/middlewares/auth.middleware.js";
+import { editorPlus, viewerPlus } from "../../common/middlewares/rbac.middleware.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const uploadDir  = path.join(__dirname, "../../../uploads");
 
-// Ensure uploads directory exists
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -36,20 +36,22 @@ const fileFilter = (req, file, cb) => {
 };
 
 const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 1024 } });
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+  fileFilter,
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
 
 const router = Router();
 router.use(authMiddleware);
 
-// Preview Excel headers before import (ICP column warning)
-router.post("/excel/preview", upload.single("file"), importController.previewExcel);
-
-// Upload account Excel file
-router.post("/excel", upload.single("file"), importController.uploadExcel);
-
-// Resolve duplicates after user review
-router.post("/resolve-duplicates", importController.resolveDuplicates);
-
-// Check import status
-router.get("/status/:importLogId", importController.getStatus);
+router.post("/excel/preview",        editorPlus, upload.single("file"), importController.previewExcel);
+router.post("/excel",                editorPlus, upload.single("file"), importController.uploadExcel);
+router.post("/excel/async",          editorPlus, uploadMemory.single("file"), importController.importExcelAsync);
+router.get("/jobs",                  viewerPlus, importController.getImportJobs);
+router.post("/jobs/:jobId/cancel",   editorPlus, importController.cancelImportJob);
+router.get("/jobs/:jobId",           viewerPlus, importController.getImportJobStatus);
+router.post("/resolve-duplicates", editorPlus, importController.resolveDuplicates);
+router.get("/status/:importLogId", viewerPlus, importController.getStatus);
 
 export default router;
