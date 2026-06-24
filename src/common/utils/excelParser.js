@@ -163,7 +163,8 @@ const ENUM_FIELDS = {
   accountSource:       ["LinkedIn", "Google", "Social Media", "Referral", "Event", "Cold Outreach"],
   commercialCategory:  ["Product Led", "SaaS-Subscriptions", "Professional Services", "Retail-E-Com"],
   businessModel:       ["B2B", "B2C", "D2C", "E-Commerce", "B2B2C", "Marketplace"],
-  annualRevenue:       ["Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M", "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+"],
+ 
+annualRevenue: ["Seed <$1M", "Early $1M-$10M", "Growth $10M-$50M", "Scale $50M-$100M", "Mid-Market $100M-$500M", "Enterprise $500M-$1B", "Mega $1B+"],  
   noOfEmployees:       EMPLOYEE_RANGES,
   techAdoptionProfile: ["Innovator", "Early Adopter", "Mainstream", "Laggard", "Leapfrog"],
   infrastructureRisk:  ["EOL", "Data Silos", "Security Gaps", "Scalability Lock", "Shadow IT"],

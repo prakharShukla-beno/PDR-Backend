@@ -47,8 +47,9 @@ const prospectSchema = new mongoose.Schema(
     annualRevenue: {
       type: String,
       enum: [
-        "Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M",
-        "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+", null,
+        "Seed <$1M", "Early $1M-$10M", "Growth $10M-$50M",
+        "Scale $50M-$100M", "Mid-Market $100M-$500M", "Enterprise $500M-$1B",
+        "Mega $1B+", null,
       ],
       default: null,
     },
