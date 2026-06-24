@@ -124,11 +124,15 @@ const getTechFitMultiplier = (prospect, icpTechInclude = [], icpTechExclude = []
 // ── STEP 2: Financial Points ──────────────────────────────────────────────────
 // Source: Requirement "Financial Capacity (The Baseline)"
 //
-// Enterprise  > $200M      → 50 pts
-// Mid-Market  $50M-$200M   → 25 pts
-// Small Biz   < $50M       → 10 pts
+// Enterprise  $500M+         → 50 pts
+// Mid-Market  $50M-$500M     → 25 pts
+// Small Biz   <$50M          → 10 pts
 //
 // FIX: "$10M-$50M" was wrongly Mid-Market — now correctly Small Business
+// UPDATED: revenue bucket labels changed to the new 7-bucket scheme
+//   ("Scale-Up $10M-$50M" → "Growth $10M-$50M", "Mid-Market $50M-$250M" /
+//    "Corporate $250M-$1B" → split into "Scale $50M-$100M" / "Mid-Market $100M-$500M" /
+//    "Enterprise $500M-$1B", "Enterprise $1B+" → "Mega $1B+")
 const getFinancialPoints = (prospect) => {
   const capacity = prospect.financialCapacity;
   const revenue  = prospect.annualRevenue;
@@ -139,11 +143,11 @@ const getFinancialPoints = (prospect) => {
 
   if (!revenue) return { points: 10, label: "Unknown — Small Business default (10 pts)" };
 
-  if (revenue.includes("$1B") || revenue.includes("$250M-$1B"))
-    return { points: 50, label: "Enterprise >$200M (50 pts)" };
+  if (revenue.includes("$1B+") || revenue.includes("$500M-$1B"))
+    return { points: 50, label: "Enterprise $500M+ (50 pts)" };
 
-  if (revenue.includes("$50M-$250M"))
-    return { points: 25, label: "Mid-Market $50M-$200M (25 pts)" };
+  if (revenue.includes("$50M-$100M") || revenue.includes("$100M-$500M"))
+    return { points: 25, label: "Mid-Market $50M-$500M (25 pts)" };
 
   // FIX: "$10M-$50M" is Small Business, not Mid-Market
   if (
@@ -151,7 +155,8 @@ const getFinancialPoints = (prospect) => {
     revenue.includes("$1M-$10M")  ||
     revenue.includes("<$1M")       ||
     revenue.includes("Seed")       ||
-    revenue.includes("Early")
+    revenue.includes("Early")      ||
+    revenue.includes("Growth")
   ) return { points: 10, label: "Small Business <$50M (10 pts)" };
 
   return { points: 10, label: "Small Business default (10 pts)" };
