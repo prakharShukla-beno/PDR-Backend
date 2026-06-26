@@ -130,6 +130,11 @@ const segmentService = {
       enrichStatus:      "pending",
     });
 
+    if (Array.isArray(data.prospectIds)) {
+      await segmentRepository.saveSnapshot(segment._id, data.prospectIds, companyId);
+      return await segmentRepository.findById(segment._id, companyId);
+    }
+
     // ICP se bana tha? Toh ICP ka region logic use karo
     let icpProfile = null;
     if (data.icpId) {
@@ -156,6 +161,11 @@ const segmentService = {
 
   update: async (id, data, companyId) => {
     await segmentRepository.update(id, data, companyId);
+
+    if (Array.isArray(data.prospectIds)) {
+      await segmentRepository.saveSnapshot(id, data.prospectIds, companyId);
+      return await segmentRepository.findById(id, companyId);
+    }
 
     if (data.filters) {
       const segment    = await segmentRepository.findById(id, companyId);
