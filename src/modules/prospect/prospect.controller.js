@@ -1,6 +1,8 @@
 import { validationResult } from "express-validator";
 import prospectService from "./prospect.service.js";
-import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
+import Prospect from "./prospect.model.js";
+import { getCompanyIdFromRequest, companyObjectId } from "../../common/utils/tenantScope.js";
+import { scoreAllProspectsForCompany } from "../../common/services/icpScoreService.js";
 
 const prospectController = {
 
@@ -152,14 +154,77 @@ const prospectController = {
   bulkReTier: async (req, res, next) => {
     try {
       const companyId = getCompanyIdFromRequest(req);
-      const results = await prospectService.bulkReTier(companyId);
+
+      const clvResult = await prospectService.bulkReTier(companyId);
+      const icpResult = await scoreAllProspectsForCompany(companyId);
+      await prospectService.syncSalesPriorityFromIcp(companyId);
+
       res.status(200).json({
         success: true,
-        message: `Re-tier complete — ${results.success} updated, ${results.failed} failed`,
-        data:    results,
+        message: "Re-tier and ICP scoring complete",
+        data: {
+          clv: clvResult,
+          icp: icpResult,
+        },
       });
     } catch (error) { next(error); }
   },
+
+  // GET /api/prospects/icp-stats — ICP tier/priority distribution
+  getIcpStats: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const cId = companyObjectId(companyId);
+
+      const [
+        tierCounts,
+        priorityCounts,
+        staleCount,
+        unscoredCount,
+      ] = await Promise.all([
+        Prospect.aggregate([
+          { $match: { companyId: cId } },
+          { $group: { _id: "$icpTier", count: { $sum: 1 } } },
+        ]),
+        Prospect.aggregate([
+          {
+            $match: {
+              companyId: cId,
+              icpSalesPriority: { $ne: null },
+            },
+          },
+          { $group: { _id: "$icpSalesPriority", count: { $sum: 1 } } },
+        ]),
+        Prospect.countDocuments({ companyId: cId, icpScoreStale: true }),
+        Prospect.countDocuments({ companyId: cId, icpMatchScore: null }),
+      ]);
+
+      const tiers = { "Tier A": 0, "Tier B": 0, "Tier C": 0 };
+      tierCounts.forEach((t) => {
+        if (t._id) tiers[t._id] = t.count;
+      });
+
+      const priorities = { P1: 0, P2: 0, P3: 0, P4: 0 };
+      priorityCounts.forEach((p) => {
+        if (p._id) priorities[p._id] = p.count;
+      });
+
+      res.status(200).json({
+        success: true,
+        data: {
+          tiers,
+          priorities,
+          staleCount,
+          unscoredCount,
+          totalScored:
+            tiers["Tier A"] + tiers["Tier B"] + tiers["Tier C"],
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // ── POST /api/prospects/:id/suggest-poc ──────────────────────────────────
   // Calls Gemini to suggest best POC for this account
   // Returns recommended contact (if exists) or target role (if no contacts)

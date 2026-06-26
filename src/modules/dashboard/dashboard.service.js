@@ -253,7 +253,9 @@ const dashboardService = {
 
       Prospect.countDocuments(enrichedFilter),
 
-      countEnrichmentsForCompany(companyId, { icpMatch: true }),
+      Prospect.countDocuments(companyFilter(companyId, {
+        icpTier: { $in: ["Tier A", "Tier B"] },
+      })),
 
       countDuplicatesForCompany(companyId, { status: "pending" }),
 
@@ -355,11 +357,14 @@ const dashboardService = {
 
   getTopProspects: async (companyId, { limit = 10 }) => {
 
-    return await Prospect.find(companyFilter(companyId, { salesPriority: "P1 (Tier A+Active)" }))
+    return await Prospect.find(companyFilter(companyId, { icpFinalScore: { $ne: null } }))
 
-      .select("accountName website primaryIndustry country salesPriority clvRanking techFitScore")
+      .select(
+        "accountName website primaryIndustry country salesPriority icpSalesPriority " +
+        "clvRanking icpTier techFitScore icpMatchScore icpFinalScore techFitBand intentSignal"
+      )
 
-      .sort({ techFitScore: -1 })
+      .sort({ icpFinalScore: -1 })
 
       .limit(Number(limit));
 

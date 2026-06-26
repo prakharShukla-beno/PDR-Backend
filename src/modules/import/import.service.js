@@ -53,10 +53,11 @@ const extractAccountFields = (prospect) => ({
   accountWebsite:       prospect.website           || null,
 });
 
-const emailExistsOnAccount = async (accountId, email) => {
+const emailExistsOnAccount = async (accountId, email, companyId) => {
   if (!email) return false;
   const existing = await Contact.findOne({
     accountId,
+    companyId,
     email: normEmail(email),
   }).select("_id").lean();
   return !!existing;
@@ -66,17 +67,28 @@ const insertContactsForProspect = async ({
   row,
   prospect,
   importLogId,
+  companyId,
   dedupIndexes,
   fileTracker,
   contactDupCountRef,
   insertErrors,
   deferredInFileDups,
 }) => {
-  const contactDocs = buildContactDocs(row, prospect, importLogId);
+  const resolvedCompanyId = companyId ?? prospect.companyId ?? null;
+  const contactDocs = buildContactDocs(
+    row,
+    prospect,
+    importLogId,
+    "account_import",
+    resolvedCompanyId
+  );
   const inserted = [];
 
   for (const contact of contactDocs) {
-    if (contact.email && await emailExistsOnAccount(prospect._id, contact.email)) {
+    if (
+      contact.email &&
+      await emailExistsOnAccount(prospect._id, contact.email, resolvedCompanyId)
+    ) {
       continue;
     }
 
@@ -341,6 +353,7 @@ const importService = {
         row,
         prospect: matchedProspect,
         importLogId: importLog._id,
+        companyId,
         dedupIndexes,
         fileTracker,
         contactDupCountRef,
@@ -355,6 +368,7 @@ const importService = {
         row,
         prospect,
         importLogId: importLog._id,
+        companyId,
         dedupIndexes,
         fileTracker,
         contactDupCountRef,
@@ -374,7 +388,10 @@ const importService = {
 
     // Flag in-file duplicates for review once the first row is in DB
     if (deferredInFileDups.length > 0 && contactsSaved > 0) {
-      const insertedContacts = await Contact.find({ importLogId: importLog._id })
+      const insertedContacts = await Contact.find({
+        importLogId: importLog._id,
+        companyId,
+      })
         .select("_id email primaryPhone firstName lastName accountName")
         .lean();
 
@@ -524,7 +541,8 @@ const importService = {
               Contact,
               newData,
               refreshed,
-              importLogId
+              importLogId,
+              companyId
             );
           }
 
@@ -553,7 +571,8 @@ const importService = {
               Contact,
               { contacts, accountName: created.accountName },
               created,
-              importLogId
+              importLogId,
+              companyId
             );
           }
 

@@ -1,4 +1,5 @@
 import prospectRepository from "./prospect.repository.js";
+import Prospect from "./prospect.model.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
 import Contact from "../contacts/contact.model.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
@@ -332,6 +333,23 @@ const prospectService = {
     }
 
     return results;
+  },
+
+  /** Backward-compat: mirror icpSalesPriority onto legacy salesPriority field */
+  syncSalesPriorityFromIcp: async (companyId) => {
+    const baseFilter = companyFilter(companyId, {});
+
+    for (const priority of ["P1", "P2", "P3", "P4"]) {
+      await Prospect.updateMany(
+        { ...baseFilter, icpSalesPriority: priority },
+        { $set: { salesPriority: priority } }
+      );
+    }
+
+    await Prospect.updateMany(
+      { ...baseFilter, icpSalesPriority: null },
+      { $set: { salesPriority: null } }
+    );
   },
 
   // ── Suggest POC via Gemini AI ─────────────────────────────────────────────

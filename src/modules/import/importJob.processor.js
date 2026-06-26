@@ -11,6 +11,10 @@ import {
   hasContactPayload,
 } from "../../common/utils/contactImportHelpers.js";
 import { calculateScore } from "../../common/utils/scoring.js";
+import {
+  scoreManyProspects,
+  getBenchmarkIcp,
+} from "../../common/services/icpScoreService.js";
 import { normEmail } from "../../common/utils/contactDedup.js";
 
 const CHUNK_SIZE = 500;
@@ -196,6 +200,7 @@ const collectContactsForProspect = async ({
 
     const exists = await Contact.findOne({
       accountId: prospect._id,
+      companyId,
       email,
     }).select("_id").lean();
 
@@ -485,6 +490,38 @@ export const processImportJob = async (jobId, companyId, userId) => {
     } catch (err) {
       console.error("Post-import scoring error:", err.message);
     }
+
+    // ── ICP Score new prospects ──────────────────────────────────────────────
+    try {
+      if (insertedProspectIds.length > 0) {
+        const benchmarkIcp = await getBenchmarkIcp(companyId);
+
+        if (benchmarkIcp) {
+          const newIds = insertedProspectIds.map((id) => id.toString());
+          const icpResult = await scoreManyProspects(
+            newIds,
+            companyId,
+            benchmarkIcp
+          );
+          console.log(
+            `Post-import ICP scoring: ` +
+            `${icpResult.scored}/${icpResult.total} scored`
+          );
+        } else {
+          await Prospect.updateMany(
+            { _id: { $in: insertedProspectIds } },
+            { $set: { icpScoreStale: true } }
+          );
+          console.log(
+            `Post-import: no benchmark ICP — ` +
+            `${insertedProspectIds.length} prospects marked stale`
+          );
+        }
+      }
+    } catch (err) {
+      console.error("Post-import ICP scoring failed:", err.message);
+    }
+    // ── end ICP scoring ────────────────────────────────────────────────────
   }
 
   console.log(

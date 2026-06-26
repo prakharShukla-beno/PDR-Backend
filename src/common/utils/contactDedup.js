@@ -108,6 +108,10 @@ export const registerInFileRow = (row, tracker) => {
 
 /** Fetch contacts from DB needed for dedup checks on a batch of rows */
 export const fetchExistingContactsForDedup = async (Contact, rows, companyId) => {
+  if (!companyId) {
+    return [];
+  }
+
   const emails = [...new Set(rows.map((r) => normEmail(r.email)).filter(Boolean))];
   const phones = [...new Set(rows.map((r) => r.primaryPhone).filter(Boolean))];
   const accountNames = [...new Set(rows.map((r) => r.accountName?.trim()).filter(Boolean))];
@@ -122,14 +126,12 @@ export const fetchExistingContactsForDedup = async (Contact, rows, companyId) =>
   }
 
   if (orConditions.length === 0) {
-    return Contact.find(companyId ? { companyId } : {})
+    return Contact.find({ companyId })
       .select("_id email firstName lastName standardizedRoles functionalDomain accountName primaryPhone linkedIn")
       .lean();
   }
 
-  const filter = companyId
-    ? { companyId, $or: orConditions }
-    : { $or: orConditions };
+  const filter = { companyId, $or: orConditions };
 
   return Contact.find(filter)
     .select("_id email firstName lastName standardizedRoles functionalDomain accountName primaryPhone linkedIn")

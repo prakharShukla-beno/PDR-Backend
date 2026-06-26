@@ -87,6 +87,7 @@ const duplicateService = {
       const { _id, ...contactData } = duplicate.newData;
       await Contact.create({
         ...contactData,
+        companyId: contactData.companyId ?? null,
         importLogId: duplicate.importLogId,
         source: contactData.source || "excel",
       });
@@ -105,7 +106,8 @@ const duplicateService = {
           Contact,
           { contacts, accountName: created.accountName },
           created,
-          duplicate.importLogId
+          duplicate.importLogId,
+          created.companyId
         );
       }
     }
@@ -163,8 +165,11 @@ const duplicateService = {
     const isContactDup = duplicate.entityType === "Contact";
 
     if (isContactDup) {
-      // Merge contact: update existing contact with new data (only fill empty fields)
-      const existingContact = await Contact.findById(duplicate.prospectId1._id || duplicate.prospectId1);
+      const contactId = duplicate.prospectId1._id || duplicate.prospectId1;
+      const contactScope = duplicate.companyId
+        ? { _id: contactId, companyId: duplicate.companyId }
+        : { _id: contactId };
+      const existingContact = await Contact.findOne(contactScope);
       if (!existingContact) throw Object.assign(new Error("Existing contact not found"), { statusCode: 404 });
 
       if (duplicate.newData) {
@@ -182,7 +187,7 @@ const duplicateService = {
           }
         }
         if (Object.keys(updateData).length > 0) {
-          await Contact.findByIdAndUpdate(existingContact._id, { $set: updateData });
+          await Contact.findOneAndUpdate(contactScope, { $set: updateData });
         }
       }
 
@@ -231,7 +236,8 @@ const duplicateService = {
           Contact,
           duplicate.newData,
           winner,
-          duplicate.importLogId
+          duplicate.importLogId,
+          winner.companyId
         );
       }
     }
@@ -241,12 +247,15 @@ const duplicateService = {
       const loser = await prospectRepository.findById(duplicate.prospectId2._id || duplicate.prospectId2);
       if (loser) {
         const winnerEmails = new Set(
-          (await Contact.find({ accountId: winner._id }).select("email").lean())
+          (await Contact.find({ accountId: winner._id, companyId: winner.companyId }).select("email").lean())
             .map((c) => normEmail(c.email))
             .filter(Boolean)
         );
 
-        const loserContacts = await Contact.find({ accountId: loser._id }).lean();
+        const loserContacts = await Contact.find({
+          accountId: loser._id,
+          companyId: loser.companyId ?? winner.companyId,
+        }).lean();
         for (const contact of loserContacts) {
           const email = normEmail(contact.email);
           if (email && winnerEmails.has(email)) continue;

@@ -181,7 +181,10 @@ const contactImportService = {
 
     // Flag in-file duplicates for review once the first row is saved
     if (deferredInFileDups.length > 0 && successCount > 0) {
-      const insertedContacts = await Contact.find({ importLogId: importLog._id })
+      const insertedContacts = await Contact.find({
+        importLogId: importLog._id,
+        companyId,
+      })
         .select("_id email primaryPhone firstName lastName accountName")
         .lean();
 
