@@ -132,6 +132,25 @@ const segmentController = {
       next(error);
     }
   },
+  // POST /api/segments/contacts
+  // Body: { segmentIds: ["id1", "id2", ...] }
+  // Returns deduped contacts across all accounts matched by the given segments
+  // Used by the Campaign wizard for multi-segment contact import
+  getContactsBySegments: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const { segmentIds } = req.body;
+      if (!Array.isArray(segmentIds) || segmentIds.length === 0) {
+        return res.status(400).json({ success: false, message: "segmentIds array required" });
+      }
+      const result = await segmentService.getContactsBySegments(segmentIds, companyId);
+      res.status(200).json({
+        success: true,
+        data: result.contacts,
+        accountCount: result.accountCount,
+      });
+    } catch (error) { next(error); }
+  },
 };
 
 export default segmentController;

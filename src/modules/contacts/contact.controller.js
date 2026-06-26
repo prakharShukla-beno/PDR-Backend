@@ -99,6 +99,21 @@ const contactController = {
     }
   },
 
+  unlinkFromAccount: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const updated = await contactService.unlinkFromAccount(req.params.id, companyId);
+
+      res.status(200).json({
+        success: true,
+        message: "Contact removed from account",
+        data: updated,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   addToCampaign: async (req, res, next) => {
     try {
       const companyId = getCompanyIdFromRequest(req);
