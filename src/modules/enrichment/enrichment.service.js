@@ -1,7 +1,15 @@
 import OpenAI from "openai";
 import enrichmentRepository  from "./enrichment.repository.js";
 import prospectRepository    from "../prospect/prospect.repository.js";
+import Prospect              from "../prospect/prospect.model.js";
 import { calculateScore }    from "../../common/utils/scoring.js";
+import { scoreOneProsect }   from "../../common/services/icpScoreService.js";
+import {
+  ALIGNMENT_TO_SCORE,
+  getTechFitMultiplier,
+  getIcpTier,
+  getIcpSalesPriority,
+} from "../../common/utils/icpScoreHelpers.js";
 import { normalizeIndustryValue } from "../../common/utils/industryMapper.js";
 import notificationService   from "../notification/notification.service.js";
 import auditLogService       from "../auditLog/auditLog.service.js";
@@ -422,6 +430,61 @@ const enrichSingleProspect = async (prospectId, userId) => {
     clvRanking:    scoreResult.clvRanking,
     salesPriority: scoreResult.salesPriority,
   });
+
+  // ── Recalculate ICP Final Score from enrichment alignment ────────────────
+  try {
+    const freshProspect = await Prospect.findById(prospectId)
+      .select("icpMatchScore intentSignal technologyAlignment companyId accountName")
+      .lean();
+
+    if (
+      freshProspect?.icpMatchScore !== null &&
+      freshProspect?.icpMatchScore !== undefined
+    ) {
+      const techFitScore =
+        ALIGNMENT_TO_SCORE[freshProspect.technologyAlignment] ?? null;
+
+      const { multiplier, band } = getTechFitMultiplier(techFitScore);
+
+      const icpFinalScore = Math.round(
+        freshProspect.icpMatchScore * multiplier
+      );
+
+      const icpTier = getIcpTier(icpFinalScore);
+      const icpSalesPriority = getIcpSalesPriority(
+        icpTier,
+        freshProspect.intentSignal
+      );
+
+      await Prospect.findByIdAndUpdate(prospectId, {
+        $set: {
+          techFitScoreIcp:  techFitScore,
+          techFitBand:      band === "Unknown" ? null : band,
+          icpFinalScore,
+          icpTier,
+          icpSalesPriority,
+          salesPriority:    icpSalesPriority,
+          icpScoreStale:    false,
+          icpScoredAt:      new Date(),
+        },
+      });
+
+      console.log(
+        `Post-enrich recalc: ICP=${freshProspect.icpMatchScore}` +
+        ` × TechFit=${techFitScore}(${band})` +
+        ` = Final=${icpFinalScore}, Tier=${icpTier}`
+      );
+    } else {
+      const companyId =
+        freshProspect?.companyId?.toString?.() ?? freshProspect?.companyId;
+      if (companyId) {
+        await scoreOneProsect(prospectId, companyId);
+      }
+    }
+  } catch (err) {
+    console.error("Post-enrichment ICP recalc failed:", err.message);
+  }
+  // ── end ICP recalc ──────────────────────────────────────────────────────
 
   console.log(`Enrichment complete for ${updatedProspect.accountName}:
   financialCapacity:   ${updatedProspect.financialCapacity}

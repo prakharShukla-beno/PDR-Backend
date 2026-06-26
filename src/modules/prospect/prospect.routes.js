@@ -13,8 +13,9 @@ const createValidation = [
   body("techFitScore").optional().isInt({ min: 0, max: 100 }).withMessage("Tech fit score must be between 0 and 100"),
 ];
 
-router.get("/export",   viewerPlus,  prospectController.export);
-router.post("/re-tier", editorPlus,  prospectController.bulkReTier);
+router.get("/export",     viewerPlus,  prospectController.export);
+router.get("/icp-stats",  viewerPlus,  prospectController.getIcpStats);
+router.post("/re-tier",   editorPlus,  prospectController.bulkReTier);
 
 router.post("/",        editorPlus,  createValidation, prospectController.create);
 router.get("/",         viewerPlus,  prospectController.getAll);

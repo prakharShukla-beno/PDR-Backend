@@ -34,16 +34,26 @@ app.set("query parser", (str) =>
   qs.parse(str, { allowDots: true, arrayLimit: 100 })
 );
 
-const corsOrigins = [
-  "https://pdr-frontend-five.vercel.app",
+const allowedOrigins = [
+  "https://benogroup.in",
+  "https://www.benogroup.in",
   "http://localhost:3000",
-];
-if (process.env.FRONTEND_URL) {
-  corsOrigins.push(process.env.FRONTEND_URL.replace(/\/+$/, ""));
-}
+  process.env.FRONTEND_URL?.replace(/\/+$/, ""),
+].filter(Boolean);
 
 app.use(helmet());
-app.use(cors({ origin: corsOrigins }));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

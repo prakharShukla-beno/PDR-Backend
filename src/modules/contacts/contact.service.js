@@ -135,7 +135,10 @@ const contactService = {
       });
 
       if (nameMatched.length > 0) {
-        byName = await Contact.find({ _id: { $in: nameMatched.map(c => c._id) } })
+        byName = await Contact.find({
+          _id: { $in: nameMatched.map(c => c._id) },
+          companyId,
+        })
           .populate("campaignIds", "name status")
           .sort({ isPrimary: -1, createdAt: -1 })
           .lean();
@@ -165,7 +168,7 @@ const contactService = {
         accountWebsite:       prospect.website         || null,
       };
       Contact.updateMany(
-        { _id: { $in: byName.map(c => c._id) } },
+        { _id: { $in: byName.map(c => c._id) }, companyId },
         { $set: accountFields }
       ).catch(() => {});
     }

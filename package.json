@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "seed:company": "node src/scripts/seedDefaultCompany.js",
+    "fix:contact-company": "node src/scripts/fixContactCompanyId.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

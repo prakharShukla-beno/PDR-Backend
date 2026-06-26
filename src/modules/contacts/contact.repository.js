@@ -1,7 +1,18 @@
 import Contact from "./contact.model.js";
+import { companyObjectId, requireCompanyId } from "../../common/utils/tenantScope.js";
 
-const scopedFilter = (id, companyId) =>
-  companyId ? { _id: id, companyId } : { _id: id };
+const scopedFilter = (id, companyId) => ({
+  _id: id,
+  companyId: companyObjectId(requireCompanyId(companyId)),
+});
+
+const assertCompanyScoped = (filter) => {
+  if (filter?.companyId == null) {
+    const error = new Error("Contact query requires companyId scope");
+    error.statusCode = 500;
+    throw error;
+  }
+};
 
 const contactRepository = {
 
@@ -26,6 +37,7 @@ const contactRepository = {
   },
 
   findAll: async ({ filter = {}, page = 1, limit = 10, sort = { createdAt: -1 } }) => {
+    assertCompanyScoped(filter);
     const skip = (page - 1) * limit;
     const [contacts, total] = await Promise.all([
       Contact.find(filter)
@@ -61,15 +73,15 @@ const contactRepository = {
   },
 
   findByAccountId: async (accountId, companyId) => {
-    const filter = companyId ? { accountId, companyId } : { accountId };
-    return await Contact.find(filter)
+    const cid = companyObjectId(requireCompanyId(companyId));
+    return await Contact.find({ accountId, companyId: cid })
       .populate("campaignIds", "name status")
       .sort({ isPrimary: -1, createdAt: -1 });
   },
 
   countByAccountId: async (accountId, companyId) => {
-    const filter = companyId ? { accountId, companyId } : { accountId };
-    return await Contact.countDocuments(filter);
+    const cid = companyObjectId(requireCompanyId(companyId));
+    return await Contact.countDocuments({ accountId, companyId: cid });
   },
 
   addCampaign: async (contactId, campaignId, companyId) => {

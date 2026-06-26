@@ -47,9 +47,19 @@ const prospectSchema = new mongoose.Schema(
     annualRevenue: {
       type: String,
       enum: [
-        "Seed <$1M", "Early $1M-$10M", "Growth $10M-$50M",
-        "Scale $50M-$100M", "Mid-Market $100M-$500M", "Enterprise $500M-$1B",
-        "Mega $1B+", null,
+        "Seed <$1M",
+        "Early $1M-$10M",
+        "Scale-Up $10M-$50M",
+        "Mid-Market $50M-$250M",
+        "Corporate $250M-$1B",
+        "Enterprise $1B+",
+        // Legacy aliases (existing DB / import data)
+        "Growth $10M-$50M",
+        "Scale $50M-$100M",
+        "Mid-Market $100M-$500M",
+        "Enterprise $500M-$1B",
+        "Mega $1B+",
+        null,
       ],
       default: null,
     },
@@ -157,6 +167,66 @@ const prospectSchema = new mongoose.Schema(
       default: null,
     },
 
+    // ── ICP Match Score (from Benchmark ICP) ─────────────────────────────────
+    icpMatchScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
+    icpScoreBreakdown: {
+      firmographic: { type: Number, default: null },
+      market:       { type: Number, default: null },
+      tech:         { type: Number, default: null },
+      persona:      { type: Number, default: null },
+    },
+    icpTier: {
+      type: String,
+      enum: ["Tier A", "Tier B", "Tier C", null],
+      default: null,
+    },
+    icpSalesPriority: {
+      type: String,
+      enum: ["P1", "P2", "P3", "P4", null],
+      default: null,
+    },
+    icpBenchmarkRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ICP",
+      default: null,
+    },
+    icpScoredAt: {
+      type: Date,
+      default: null,
+    },
+    icpScoreStale: {
+      type: Boolean,
+      default: false,
+    },
+    techFitScoreIcp: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
+    techFitBand: {
+      type: String,
+      enum: [
+        "Core Match",
+        "Addressable",
+        "Stretch",
+        "Incompatible",
+        null,
+      ],
+      default: null,
+    },
+    icpFinalScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
+
     // ── Relational References ────────────────────────────────────────────────
     // contacts[] array removed — contacts are stored in the separate Contact collection
     // Account detail page: GET /api/contacts?accountId=xxx
@@ -253,6 +323,11 @@ prospectSchema.index({ finalScore: 1 });
 prospectSchema.index({ technologyAlignment: 1 });
 prospectSchema.index({ assignedTo: 1 });
 prospectSchema.index({ source: 1 });
+prospectSchema.index({ companyId: 1, icpMatchScore: 1 });
+prospectSchema.index({ companyId: 1, icpScoreStale: 1 });
+prospectSchema.index({ companyId: 1, icpTier: 1 });
+prospectSchema.index({ companyId: 1, icpSalesPriority: 1 });
+prospectSchema.index({ companyId: 1, icpFinalScore: 1 });
 
 const Prospect = mongoose.model("Prospect", prospectSchema);
 export default Prospect;
