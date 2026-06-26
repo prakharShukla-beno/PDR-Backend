@@ -245,6 +245,34 @@ const contactService = {
     }, companyId);
   },
 
+  // Unlink a contact from its account — Apollo style
+  // Contact record itself is NOT deleted, only the account association is cleared
+  unlinkFromAccount: async (contactId, companyId) => {
+    const contact = await contactRepository.findById(contactId, companyId);
+    if (!contact) {
+      const error = new Error("Contact not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return await contactRepository.update(contactId, {
+      accountId:            null,
+      accountName:          null,
+      isLinked:             false,
+      accountIndustry:      null,
+      accountCountry:       null,
+      accountCity:          null,
+      accountEmployees:     null,
+      accountRevenue:       null,
+      accountBusinessModel: null,
+      accountSalesPriority: null,
+      accountClvRanking:    null,
+      accountTechFitScore:  null,
+      accountIntentSignal:  null,
+      accountWebsite:       null,
+    }, companyId);
+  },
+
   bulkLinkByName: async (companyId) => {
     const unlinked = await contactRepository.findAll({
       filter: companyFilter(companyId, { isLinked: false, accountName: { $ne: null } }),

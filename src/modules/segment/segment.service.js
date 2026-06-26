@@ -1,5 +1,7 @@
 import segmentRepository    from "./segment.repository.js";
+import Segment               from "./segment.model.js";
 import Prospect             from "../prospect/prospect.model.js";
+import Contact              from "../contacts/contact.model.js";
 import ICP                  from "../icp/icp.model.js";
 import { buildProspectMatchFilter } from "../icp/icp.service.js";
 import enrichmentService, { needsEnrichment } from "../enrichment/enrichment.service.js";
@@ -527,6 +529,36 @@ const segmentService = {
       matchedAccountIds: mergedIds,
       matchCount: mergedIds.length,
     });
+  },
+
+  // ─── Get deduped contacts for one or more segments ────────────────────────
+  // Used by the Campaign wizard — multi-select segments → import their contacts
+  // Dedup happens at the account level (Set), so a contact never appears twice
+  // even if its account is matched by more than one selected segment
+  getContactsBySegments: async (segmentIds, companyId) => {
+    const segs = await Segment.find({
+      _id: { $in: segmentIds },
+      ...(companyId ? { companyId } : {}),
+    }).lean();
+
+    const accountIdSet = new Set();
+    segs.forEach((seg) => {
+      (seg.matchedAccountIds || []).forEach((id) => accountIdSet.add(id.toString()));
+    });
+    const accountIds = [...accountIdSet];
+
+    if (accountIds.length === 0) {
+      return { contacts: [], accountCount: 0 };
+    }
+
+    const contacts = await Contact.find({
+      accountId: { $in: accountIds },
+      ...(companyId ? { companyId } : {}),
+    })
+      .select("firstName lastName email accountName standardizedRoles functionalDomain")
+      .lean();
+
+    return { contacts, accountCount: accountIds.length };
   },
 };
 

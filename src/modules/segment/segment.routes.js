@@ -8,6 +8,7 @@ router.use(authMiddleware);
 
 // ── Specific routes PEHLE register karo /:id se conflict avoid karne ke liye ─
 router.post("/preview",              segmentController.preview);
+router.post("/contacts",             segmentController.getContactsBySegments);  // ← NEW
 router.post("/:id/sync",             segmentController.sync);
 router.post("/:id/add-accounts",     segmentController.addAccounts);   // ← NEW
 router.post("/:id/enrich-score",     segmentController.enrichAndScore);  // NEW

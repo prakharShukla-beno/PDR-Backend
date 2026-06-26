@@ -28,6 +28,7 @@ router.get("/account/:accountId",             contactController.getByAccountId);
 router.get("/:id",                            contactController.getById);
 router.put("/:id",                            contactController.update);
 router.delete("/:id",                         contactController.delete);
+router.delete("/:id/account",                contactController.unlinkFromAccount);
 router.post("/:id/campaigns/:campaignId",     contactController.addToCampaign);
 router.delete("/:id/campaigns/:campaignId",   contactController.removeFromCampaign);
 
