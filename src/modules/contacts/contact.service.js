@@ -3,6 +3,7 @@ import Contact          from "./contact.model.js";
 import Prospect          from "../prospect/prospect.model.js";
 import campaignRepository from "../campaign/campaign.repository.js";
 import { companyFilter } from "../../common/utils/tenantScope.js";
+import { dedupeContactsForAccount } from "../../common/utils/contactDedup.js";
 
 // Helper — extract denormalized account fields from a prospect
 const extractAccountFields = (prospect) => ({
@@ -173,7 +174,7 @@ const contactService = {
       ).catch(() => {});
     }
 
-    return contacts;
+    return dedupeContactsForAccount(contacts);
   },
 
   update: async (id, data, companyId) => {
