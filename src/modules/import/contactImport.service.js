@@ -139,6 +139,7 @@ const contactImportService = {
           source:      "import",
           importLogId: importLog._id,
           status:      "pending",
+          companyId,
         });
         duplicateRows.push({
           newData:      preparedRow,
@@ -216,6 +217,7 @@ const contactImportService = {
             source:      "import",
             importLogId: importLog._id,
             status:      "pending",
+            companyId,
           });
           duplicateRows.push({
             newData:      dup.preparedRow,

@@ -7,11 +7,12 @@ const duplicateController = {
   getAll: async (req, res, next) => {
     try {
       const companyId = getCompanyIdFromRequest(req);
-      const { page, limit, status } = req.query;
-      const result = await duplicateService.getAll({ page, limit, status }, companyId);
+      const { page, limit, status, entityType } = req.query;
+      const result = await duplicateService.getAll({ page, limit, status, entityType }, companyId);
       res.status(200).json({
         success: true,
         data:       result.duplicates,
+        counts:     result.counts,
         pagination: result.pagination,
       });
     } catch (error) {

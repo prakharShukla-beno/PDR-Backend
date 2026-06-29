@@ -1,3 +1,25 @@
+import { INDUSTRIES, SECTOR_TAXONOMY } from "./taxonomy.js";
+
+const normalizeKey = (value) =>
+  String(value)
+    .toLowerCase()
+    .trim()
+    .replace(/[.,/]+/g, " ")
+    .replace(/\s+/g, " ");
+
+let subSectorToSectorMap = null;
+
+const buildSubSectorToSectorMap = () => {
+  if (subSectorToSectorMap) return subSectorToSectorMap;
+  subSectorToSectorMap = {};
+  for (const [sector, subs] of Object.entries(SECTOR_TAXONOMY)) {
+    for (const sub of Object.keys(subs)) {
+      subSectorToSectorMap[normalizeKey(sub)] = sector;
+    }
+  }
+  return subSectorToSectorMap;
+};
+
 /**
  * SECTOR_TO_INDUSTRIES — Commercial Sector Parent→Child Mapping
  * 
@@ -88,7 +110,7 @@ export const buildIndustryToSectorMap = () => {
   const map = {};
   for (const [sector, industries] of Object.entries(SECTOR_TO_INDUSTRIES)) {
     for (const industry of industries) {
-      const key = industry.toLowerCase().trim();
+      const key = normalizeKey(industry);
       map[key] = sector;
     }
   }
@@ -132,8 +154,56 @@ export const expandSectors = (values) => {
 export const getSectorForIndustry = (industry) => {
   if (!industry) return null;
   const map = buildIndustryToSectorMap();
-  const key = String(industry).toLowerCase().trim();
+  const key = normalizeKey(industry);
   return map[key] || null;
+};
+
+/**
+ * Map any industry / sub-sector / sector label to one of the 11 commercial sectors.
+ */
+export const resolveToCommercialSector = (value) => {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  const key = normalizeKey(trimmed);
+
+  for (const sector of INDUSTRIES) {
+    if (normalizeKey(sector) === key) return sector;
+  }
+
+  const fromChild = getSectorForIndustry(trimmed);
+  if (fromChild) return fromChild;
+
+  const subMap = buildSubSectorToSectorMap();
+  if (subMap[key]) return subMap[key];
+
+  const industryMap = buildIndustryToSectorMap();
+  let bestSector = null;
+  let bestLen = 0;
+  for (const [indKey, sector] of Object.entries(industryMap)) {
+    if (key === indKey || key.includes(indKey) || indKey.includes(key)) {
+      const len = Math.min(indKey.length, key.length);
+      if (len >= 4 && len > bestLen) {
+        bestSector = sector;
+        bestLen = len;
+      }
+    }
+  }
+  if (bestSector) return bestSector;
+
+  for (const sector of INDUSTRIES) {
+    const sectorKey = normalizeKey(sector);
+    if (key.includes(sectorKey) || sectorKey.includes(key)) {
+      if (Math.min(sectorKey.length, key.length) >= 8) return sector;
+    }
+  }
+
+  for (const [subKey, sector] of Object.entries(subMap)) {
+    if (key.includes(subKey) || subKey.includes(key)) {
+      if (Math.min(subKey.length, key.length) >= 6) return sector;
+    }
+  }
+
+  return "Professional Services";
 };
 
 /**
@@ -145,7 +215,7 @@ export const getSectorForIndustry = (industry) => {
 export const isValidChildIndustry = (value) => {
   if (!value) return false;
   const map = buildIndustryToSectorMap();
-  const key = String(value).toLowerCase().trim();
+  const key = normalizeKey(value);
   return !!map[key];
 };
 

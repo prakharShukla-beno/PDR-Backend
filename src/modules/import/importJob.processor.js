@@ -3,6 +3,7 @@ import StagedRow from "./stagedRow.model.js";
 import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
 import contactRepository from "../contacts/contact.repository.js";
+import duplicateRepository from "../duplicate/duplicate.repository.js";
 import {
   validateAndNormalizeRow,
 } from "../../common/utils/excelParser.js";
@@ -15,7 +16,17 @@ import {
   scoreManyProspects,
   getBenchmarkIcp,
 } from "../../common/services/icpScoreService.js";
-import { normEmail } from "../../common/utils/contactDedup.js";
+import {
+  buildContactDedupIndexes,
+  findDbContactDuplicate,
+  registerInFileRow,
+  createInFileDedupTracker,
+  checkInFileDuplicate,
+  normEmail,
+  normPhone,
+  nameAccountKey,
+} from "../../common/utils/contactDedup.js";
+import { companyObjectId } from "../../common/utils/tenantScope.js";
 
 const CHUNK_SIZE = 500;
 const CANCEL_CHECK_INTERVAL_MS = 500;
@@ -134,6 +145,90 @@ const registerInJobKeys = (normalizedRow, seenInJob) => {
   if (websiteKey) seenInJob.websites.add(websiteKey);
 };
 
+const buildAccountDuplicateMatchFields = (normalizedRow, existingMaps, seenInJob, duplicate) => {
+  const nameKey = normalizedRow.accountName?.toLowerCase().trim();
+  const websiteKey = normalizedRow.website?.toLowerCase().trim();
+  const matchFields = [];
+
+  if (duplicate.type === "db") {
+    if (nameKey && existingMaps.byName.has(nameKey)) matchFields.push("accountName");
+    if (websiteKey && existingMaps.byWebsite.has(websiteKey)) matchFields.push("website");
+  } else {
+    if (nameKey && seenInJob.names.has(nameKey)) matchFields.push("accountName");
+    else if (websiteKey && seenInJob.websites.has(websiteKey)) matchFields.push("website");
+  }
+
+  return matchFields.length ? matchFields : ["accountName"];
+};
+
+const buildAccountDuplicateRecord = ({
+  prospectId,
+  normalizedRow,
+  matchFields,
+  companyId,
+}) => {
+  const { contacts, ...prospectData } = normalizedRow;
+  return {
+    prospectId1: prospectId,
+    entityType: "Prospect",
+    newData: { ...prospectData, contacts },
+    matchFields,
+    source: "import",
+    status: "pending",
+    companyId: companyObjectId(companyId),
+  };
+};
+
+const resolveProspectId = (prospect) => prospect?._id ?? prospect?.id ?? null;
+
+const persistAccountDuplicateRecords = async (records) => {
+  if (!records.length) return 0;
+
+  try {
+    await duplicateRepository.insertMany(records);
+    return records.length;
+  } catch (err) {
+    console.warn(
+      `Import duplicate bulk insert issue (${records.length} records): ${err.message}`
+    );
+
+    let saved = 0;
+    for (const record of records) {
+      try {
+        await duplicateRepository.create(record);
+        saved++;
+      } catch (createErr) {
+        if (createErr?.code === 11000) {
+          saved++;
+          continue;
+        }
+        console.error(
+          `Import duplicate insert failed for account "${record.newData?.accountName ?? "?"}":`,
+          createErr.message
+        );
+      }
+    }
+    return saved;
+  }
+};
+
+const createContactDuplicateRecord = async ({
+  contactId,
+  contact,
+  matchFields,
+  companyId,
+}) => {
+  await duplicateRepository.create({
+    prospectId1: contactId,
+    entityType: "Contact",
+    newData: contact,
+    matchFields,
+    source: "import",
+    status: "pending",
+    companyId: companyObjectId(companyId),
+  });
+};
+
 const insertProspectsBulk = async (docs) => {
   if (!docs.length) return [];
 
@@ -173,9 +268,12 @@ const collectContactsForProspect = async ({
   jobId,
   companyId,
   emailCache,
+  contactDedupIndexes,
+  inFileContactTracker,
+  deferredInFileContactDups,
 }) => {
   if (!row.contacts?.length || !hasContactPayload(row.contacts[0])) {
-    return [];
+    return { docs: [], duplicateCount: 0 };
   }
 
   const docs = buildContactDocs(
@@ -186,34 +284,69 @@ const collectContactsForProspect = async ({
   );
 
   const toInsert = [];
+  let duplicateCount = 0;
+
   for (const doc of docs) {
-    if (await isJobCancelled(jobId)) return [];
+    if (await isJobCancelled(jobId)) return { docs: [], duplicateCount };
 
-    if (!doc.email) {
-      toInsert.push(doc);
+    const email = doc.email ? normEmail(doc.email) : null;
+    const cacheKey = email ? `${prospect._id}:${email}` : null;
+
+    if (email && cacheKey && emailCache.has(cacheKey)) {
+      duplicateCount++;
       continue;
     }
 
-    const email = normEmail(doc.email);
-    const cacheKey = `${prospect._id}:${email}`;
-    if (emailCache.has(cacheKey)) continue;
+    if (email) {
+      const existsOnAccount = await Contact.findOne({
+        accountId: prospect._id,
+        companyId,
+        email,
+      }).select("_id").lean();
 
-    const exists = await Contact.findOne({
-      accountId: prospect._id,
-      companyId,
-      email,
-    }).select("_id").lean();
+      if (existsOnAccount) {
+        await createContactDuplicateRecord({
+          contactId: existsOnAccount._id,
+          contact: doc,
+          matchFields: ["email"],
+          companyId,
+        });
+        emailCache.add(cacheKey);
+        duplicateCount++;
+        continue;
+      }
+    }
 
-    if (exists) {
-      emailCache.add(cacheKey);
+    const dbDup = findDbContactDuplicate(doc, contactDedupIndexes);
+    if (dbDup) {
+      await createContactDuplicateRecord({
+        contactId: dbDup.existing._id,
+        contact: doc,
+        matchFields: dbDup.matchFields,
+        companyId,
+      });
+      if (cacheKey) emailCache.add(cacheKey);
+      duplicateCount++;
       continue;
     }
 
-    emailCache.add(cacheKey);
+    const inFileDup = checkInFileDuplicate(doc, inFileContactTracker);
+    if (inFileDup) {
+      deferredInFileContactDups.push({
+        contact: doc,
+        matchFields: inFileDup.matchFields,
+        firstRowData: inFileDup.firstRow,
+      });
+      duplicateCount++;
+      continue;
+    }
+
+    registerInFileRow(doc, inFileContactTracker);
+    if (cacheKey) emailCache.add(cacheKey);
     toInsert.push(doc);
   }
 
-  return toInsert;
+  return { docs: toInsert, duplicateCount };
 };
 
 export const processImportJob = async (jobId, companyId, userId) => {
@@ -224,6 +357,21 @@ export const processImportJob = async (jobId, companyId, userId) => {
   const insertedProspectIds = [];
   const seenInJob = { names: new Set(), websites: new Set() };
   const emailCache = new Set();
+  const inFileContactTracker = createInFileDedupTracker();
+  const deferredInFileContactDups = [];
+
+  const existingMaps = buildExistingMaps(
+    await Prospect.find({ companyId })
+      .select(
+        "_id accountName accountNameLower website primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal"
+      )
+      .lean()
+  );
+
+  const existingContacts = await Contact.find({ companyId })
+    .select("_id email primaryPhone firstName lastName accountName")
+    .lean();
+  const contactDedupIndexes = buildContactDedupIndexes(existingContacts);
 
   let hasMore = true;
 
@@ -275,30 +423,10 @@ export const processImportJob = async (jobId, companyId, userId) => {
       }
     }
 
-    const accountNames = validated
-      .map((v) => v.normalizedRow.accountName?.toLowerCase().trim())
-      .filter(Boolean);
-    const websites = validated
-      .map((v) => v.normalizedRow.website?.toLowerCase().trim())
-      .filter(Boolean);
-
-    const existingProspects = accountNames.length || websites.length
-      ? await Prospect.find({
-          companyId,
-          $or: [
-            ...(accountNames.length
-              ? [{ accountNameLower: { $in: accountNames } }]
-              : []),
-            ...(websites.length ? [{ website: { $in: websites } }] : []),
-          ],
-        })
-          .select("_id accountName accountNameLower website primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal")
-          .lean()
-      : [];
-
-    const existingMaps = buildExistingMaps(existingProspects);
     const prospectsToInsert = [];
     const deferredContacts = [];
+    const pendingInJobDuplicates = [];
+    const accountDuplicateRecords = [];
 
     for (const { stagedRow, normalizedRow } of validated) {
       const duplicate = findExistingProspect(normalizedRow, existingMaps, seenInJob);
@@ -307,6 +435,31 @@ export const processImportJob = async (jobId, companyId, userId) => {
 
       if (duplicate) {
         duplicateCount++;
+        const matchFields = buildAccountDuplicateMatchFields(
+          normalizedRow,
+          existingMaps,
+          seenInJob,
+          duplicate
+        );
+
+        const existingProspectId = resolveProspectId(duplicate.prospect);
+        if (duplicate.type === "db" && existingProspectId) {
+          accountDuplicateRecords.push(
+            buildAccountDuplicateRecord({
+              prospectId: existingProspectId,
+              normalizedRow,
+              matchFields,
+              companyId,
+            })
+          );
+        } else {
+          pendingInJobDuplicates.push({
+            normalizedRow,
+            nameKey,
+            websiteKey,
+            matchFields,
+          });
+        }
 
         if (duplicate.type === "db") {
           deferredContacts.push({
@@ -356,6 +509,35 @@ export const processImportJob = async (jobId, companyId, userId) => {
       }
     }
 
+    for (const dup of pendingInJobDuplicates) {
+      const existing =
+        (dup.nameKey && existingMaps.byName.get(dup.nameKey)) ||
+        (dup.websiteKey && existingMaps.byWebsite.get(dup.websiteKey));
+
+      if (!existing?._id) continue;
+
+      accountDuplicateRecords.push(
+        buildAccountDuplicateRecord({
+          prospectId: existing._id,
+          normalizedRow: dup.normalizedRow,
+          matchFields: dup.matchFields,
+          companyId,
+        })
+      );
+    }
+
+    const savedAccountDups = await persistAccountDuplicateRecords(accountDuplicateRecords);
+    if (accountDuplicateRecords.length > 0) {
+      console.log(
+        `Import job ${jobId}: saved ${savedAccountDups}/${accountDuplicateRecords.length} account duplicate records`
+      );
+    }
+    if (accountDuplicateRecords.length > 0 && savedAccountDups === 0) {
+      console.error(
+        `Import job ${jobId}: failed to persist ${accountDuplicateRecords.length} account duplicate records`
+      );
+    }
+
     const resolveProspectForContact = (entry) => {
       if (entry.prospect?._id) return entry.prospect;
 
@@ -375,14 +557,18 @@ export const processImportJob = async (jobId, companyId, userId) => {
       const prospect = resolveProspectForContact(entry);
       if (!prospect) continue;
 
-      const docs = await collectContactsForProspect({
+      const result = await collectContactsForProspect({
         row: entry.row,
         prospect,
         jobId,
         companyId,
         emailCache,
+        contactDedupIndexes,
+        inFileContactTracker,
+        deferredInFileContactDups,
       });
-      contactsToInsert.push(...docs);
+      contactsToInsert.push(...result.docs);
+      duplicateCount += result.duplicateCount;
     }
 
     for (const { normalizedRow, nameKey } of prospectsToInsert) {
@@ -391,19 +577,32 @@ export const processImportJob = async (jobId, companyId, userId) => {
       const prospect = nameKey ? existingMaps.byName.get(nameKey) : null;
       if (!prospect) continue;
 
-      const docs = await collectContactsForProspect({
+      const result = await collectContactsForProspect({
         row: normalizedRow,
         prospect,
         jobId,
         companyId,
         emailCache,
+        contactDedupIndexes,
+        inFileContactTracker,
+        deferredInFileContactDups,
       });
-      contactsToInsert.push(...docs);
+      contactsToInsert.push(...result.docs);
+      duplicateCount += result.duplicateCount;
     }
 
     if (contactsToInsert.length > 0) {
       if (await cancelImportJobIfRequested(jobId)) return;
       await insertContactsBulk(contactsToInsert);
+
+      const refreshed = buildContactDedupIndexes(
+        await Contact.find({ companyId })
+          .select("_id email primaryPhone firstName lastName accountName")
+          .lean()
+      );
+      contactDedupIndexes.byEmail = refreshed.byEmail;
+      contactDedupIndexes.byPhone = refreshed.byPhone;
+      contactDedupIndexes.byNameAccount = refreshed.byNameAccount;
     }
 
     if (await cancelImportJobIfRequested(jobId)) return;
@@ -434,6 +633,45 @@ export const processImportJob = async (jobId, companyId, userId) => {
 
   if (jobState?.status === "cancelled" || jobState?.cancelRequested) {
     return;
+  }
+
+  if (deferredInFileContactDups.length > 0) {
+    const insertedContacts = await Contact.find({ companyId })
+      .select("_id email primaryPhone firstName lastName accountName")
+      .lean();
+
+    const insertedByEmail = {};
+    const insertedByPhone = {};
+    const insertedByNameAccount = {};
+
+    for (const contact of insertedContacts) {
+      const email = normEmail(contact.email);
+      if (email) insertedByEmail[email] = contact;
+
+      const phone = normPhone(contact.primaryPhone);
+      if (phone) insertedByPhone[phone] = contact;
+
+      const nameKey = nameAccountKey(contact);
+      if (nameKey) insertedByNameAccount[nameKey] = contact;
+    }
+
+    for (const dup of deferredInFileContactDups) {
+      const first = dup.firstRowData;
+      const existing =
+        (normEmail(first.email) && insertedByEmail[normEmail(first.email)]) ||
+        (normPhone(first.primaryPhone) && insertedByPhone[normPhone(first.primaryPhone)]) ||
+        (nameAccountKey(first) && insertedByNameAccount[nameAccountKey(first)]);
+
+      if (!existing) continue;
+
+      await createContactDuplicateRecord({
+        contactId: existing._id,
+        contact: dup.contact,
+        matchFields: dup.matchFields,
+        companyId,
+      });
+      duplicateCount++;
+    }
   }
 
   const finalStatus = errorCount > 0 ? "completed_with_errors" : "completed";

@@ -9,8 +9,25 @@ import pkg from "xlsx";
 const { utils, write } = pkg;
 
 const toArray = (val) => {
-  if (!val) return [];
-  return Array.isArray(val) ? val.filter(Boolean) : [val].filter(Boolean);
+  if (val == null || val === "") return [];
+
+  if (Array.isArray(val)) {
+    return val.flatMap((item) => toArray(item)).filter(Boolean);
+  }
+
+  if (typeof val === "object") {
+    const values = Object.values(val).flatMap((item) => toArray(item)).filter(Boolean);
+    if (values.length) return values;
+  }
+
+  if (typeof val === "string") {
+    if (val.includes(",")) {
+      return val.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+    return [val].filter(Boolean);
+  }
+
+  return [val].filter(Boolean);
 };
 
 /** Map `industry` or `primaryIndustry` query param to a MongoDB primaryIndustry filter */

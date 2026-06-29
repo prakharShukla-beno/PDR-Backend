@@ -4,6 +4,7 @@ import Segment from "../segment/segment.model.js";
 import Campaign from "../campaign/campaign.model.js";
 import { expandSectors } from "../../common/utils/industryMapper.js";
 import { companyFilter, companyUserIds } from "../../common/utils/tenantScope.js";
+import { resolveContactAccountLinks } from "../../common/utils/resolveContactAccountLinks.js";
 
 const RESULT_LIMIT_PER_TYPE = 5;
 
@@ -382,8 +383,10 @@ const searchService = {
       Contact.countDocuments(filter),
     ]);
 
+    const resolvedContacts = await resolveContactAccountLinks(contacts, companyId);
+
     return {
-      contacts,
+      contacts: resolvedContacts,
       pagination: {
         total,
         page:       Number(page),
