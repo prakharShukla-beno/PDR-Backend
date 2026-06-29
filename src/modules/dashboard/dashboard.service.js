@@ -17,6 +17,10 @@ import {
   requireCompanyId,
 } from "../../common/utils/tenantScope.js";
 
+import { resolveToCommercialSector } from "../../common/utils/industryMapper.js";
+
+import { INDUSTRIES } from "../../common/constants/taxonomy.js";
+
 
 
 /** Enrichment has no companyId — scope via linked prospect */
@@ -282,19 +286,24 @@ const dashboardService = {
 
 
   getByIndustry: async (companyId) => {
-
-    return await Prospect.aggregate([
-
+    const rows = await Prospect.aggregate([
       companyMatchStage(companyId, { primaryIndustry: { $ne: null } }),
-
       { $group: { _id: "$primaryIndustry", count: { $sum: 1 } } },
-
-      { $sort: { count: -1 } },
-
-      { $project: { _id: 0, industry: "$_id", count: 1 } },
-
     ]);
 
+    const sectorCounts = Object.fromEntries(INDUSTRIES.map((sector) => [sector, 0]));
+
+    for (const row of rows) {
+      const sector = resolveToCommercialSector(row._id);
+      if (sector && sectorCounts[sector] !== undefined) {
+        sectorCounts[sector] += row.count;
+      }
+    }
+
+    return INDUSTRIES.map((sector) => ({
+      sector,
+      count: sectorCounts[sector] ?? 0,
+    })).sort((a, b) => b.count - a.count);
   },
 
 
@@ -308,8 +317,6 @@ const dashboardService = {
       { $group: { _id: "$country", count: { $sum: 1 } } },
 
       { $sort: { count: -1 } },
-
-      { $limit: 15 },
 
       { $project: { _id: 0, country: "$_id", count: 1 } },
 

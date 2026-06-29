@@ -4,6 +4,7 @@ import Prospect          from "../prospect/prospect.model.js";
 import campaignRepository from "../campaign/campaign.repository.js";
 import { companyFilter } from "../../common/utils/tenantScope.js";
 import { dedupeContactsForAccount } from "../../common/utils/contactDedup.js";
+import { resolveContactAccountLinks, resolveContactAccountLink } from "../../common/utils/resolveContactAccountLinks.js";
 
 // Helper — extract denormalized account fields from a prospect
 const extractAccountFields = (prospect) => ({
@@ -89,8 +90,10 @@ const contactService = {
       filter, page: Number(page), limit: Number(limit), sort,
     });
 
+    const resolvedContacts = await resolveContactAccountLinks(contacts, companyId);
+
     return {
-      contacts,
+      contacts: resolvedContacts,
       pagination: {
         total, page: Number(page), limit: Number(limit),
         totalPages: Math.ceil(total / Number(limit)),
@@ -105,7 +108,7 @@ const contactService = {
       error.statusCode = 404;
       throw error;
     }
-    return contact;
+    return await resolveContactAccountLink(contact, companyId);
   },
 
   getByAccountId: async (accountId, companyId) => {
