@@ -102,6 +102,7 @@ const insertContactsForProspect = async ({
         source:      "import",
         importLogId,
         status:      "pending",
+        companyId:   resolvedCompanyId,
       });
       contactDupCountRef.count++;
       continue;
@@ -240,11 +241,13 @@ const importService = {
         const matchFields = [nameMatch && "accountName", websiteMatch && "website"].filter(Boolean);
         await duplicateRepository.create({
           prospectId1: existingRecord._id,
+          entityType:  "Prospect",
           newData:     { ...prospectData, contacts },
           matchFields,
           source:      "import",
           importLogId: importLog._id,
           status:      "pending",
+          companyId,
         });
         duplicateRows.push({
           newData:      { ...prospectData, contacts },
@@ -423,6 +426,7 @@ const importService = {
             source:      "import",
             importLogId: importLog._id,
             status:      "pending",
+            companyId,
           });
           contactDupCount++;
         }

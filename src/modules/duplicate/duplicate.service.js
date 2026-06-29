@@ -8,28 +8,85 @@ import {
   saveContactsForProspect,
 } from "../../common/utils/contactImportHelpers.js";
 import { normEmail } from "../../common/utils/contactDedup.js";
+import { companyObjectId } from "../../common/utils/tenantScope.js";
+import Prospect from "../prospect/prospect.model.js";
+import Duplicate from "./duplicate.model.js";
+
+const repairOrphanedDuplicates = async (companyId) => {
+  const cid = companyObjectId(companyId);
+
+  const prospectOrphans = await Duplicate.find({
+    entityType: "Prospect",
+    status: "pending",
+    $or: [{ companyId: null }, { companyId: { $exists: false } }],
+  }).lean();
+
+  for (const dup of prospectOrphans) {
+    const linked = await Prospect.findById(dup.prospectId1).select("_id companyId").lean();
+    if (linked?.companyId?.toString() === cid.toString()) {
+      await Duplicate.updateOne({ _id: dup._id }, { $set: { companyId: cid } });
+      continue;
+    }
+
+    const accountName = dup.newData?.accountName;
+    if (!accountName) continue;
+
+    const resolved = await Prospect.findOne({
+      companyId: cid,
+      accountNameLower: String(accountName).toLowerCase().trim(),
+    }).select("_id").lean();
+
+    if (resolved) {
+      await Duplicate.updateOne(
+        { _id: dup._id },
+        { $set: { prospectId1: resolved._id, companyId: cid } }
+      );
+    }
+  }
+
+  const contactOrphans = await Duplicate.find({
+    entityType: "Contact",
+    status: "pending",
+    $or: [{ companyId: null }, { companyId: { $exists: false } }],
+  }).lean();
+
+  for (const dup of contactOrphans) {
+    const linked = await Contact.findById(dup.prospectId1).select("_id companyId").lean();
+    if (linked?.companyId?.toString() !== cid.toString()) continue;
+    await Duplicate.updateOne({ _id: dup._id }, { $set: { companyId: cid } });
+  }
+};
 
 const duplicateService = {
 
   getAll: async (query, companyId) => {
-    const { page = 1, limit = 10, status, type } = query;
+    await repairOrphanedDuplicates(companyId);
+
+    const { page = 1, limit = 10, status, type, entityType } = query;
     const filter = {};
     if (status) filter.status = status;
-    // type=import → newData wale | type=manual → prospectId2 wale
     if (type === "import") filter.newData = { $ne: null };
     if (type === "manual") filter.prospectId2 = { $ne: null };
 
-    const companyScope = await dashboardService.getDuplicateCompanyFilter(companyId);
-    const scopedFilter = { $and: [filter, companyScope] };
+    const cid = companyObjectId(companyId);
+    const baseFilter = { ...filter, companyId: cid };
 
-    const { duplicates, total } = await duplicateRepository.findAll({
-      filter: scopedFilter,
-      page:  Number(page),
+    const { duplicates, total } = await duplicateRepository.findAllForCompany({
+      companyId,
+      filter,
+      page: Number(page),
       limit: Number(limit),
+      entityType: entityType === "Contact" || entityType === "Prospect" ? entityType : undefined,
     });
+
+    const [accountTotal, contactTotal] = await Promise.all([
+      Duplicate.countDocuments({ ...baseFilter, entityType: "Prospect" }),
+      Duplicate.countDocuments({ ...baseFilter, entityType: "Contact" }),
+    ]);
 
     return {
       duplicates,
+      counts: { accounts: accountTotal, contacts: contactTotal },
       pagination: {
         total,
         page:       Number(page),
