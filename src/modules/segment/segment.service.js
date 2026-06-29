@@ -220,11 +220,12 @@ const segmentService = {
 
     // Always fetch LIVE scores from Prospect — never use cached snapshot values
     const LIVE_ACCOUNT_FIELDS = [
-      "accountName", "website", "primaryIndustry", "country",
+      "accountName", "website", "primaryIndustry", "country", "hqLocationCity",
       "noOfEmployees", "annualRevenue", "primaryTechStack",
-      "finalScore", "clvRanking", "salesPriority", "techFitScore",
-      "technologyAlignment", "intentSignal", "financialCapacity",
+      "clvRanking", "technologyAlignment", "intentSignal", "financialCapacity",
       "strategicValue", "marginPotential",
+      "techFitScoreIcp", "techFitBand",
+      "icpFinalScore", "icpMatchScore", "icpTier", "icpSalesPriority", "icpScoreStale",
     ].join(" ");
 
     const prospectRows = await Prospect.find({

@@ -137,3 +137,45 @@ export const fetchExistingContactsForDedup = async (Contact, rows, companyId) =>
     .select("_id email firstName lastName standardizedRoles functionalDomain accountName primaryPhone linkedIn")
     .lean();
 };
+
+/** Prefer primary / richer record when the same person appears more than once on an account */
+const pickPreferredContact = (a, b) => {
+  if (a.isPrimary && !b.isPrimary) return a;
+  if (b.isPrimary && !a.isPrimary) return b;
+  const richness = (c) =>
+    [c.email, c.primaryPhone, c.standardizedRoles, c.linkedIn].filter(hasValue).length;
+  const aRich = richness(a);
+  const bRich = richness(b);
+  if (bRich !== aRich) return bRich > aRich ? b : a;
+  const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+  const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+  return bTime >= aTime ? b : a;
+};
+
+/** One row per person when listing contacts for a single account (email, then name) */
+export const dedupeContactsForAccount = (contacts = []) => {
+  const byEmail = new Map();
+  const byName = new Map();
+  const noKey = [];
+
+  for (const c of contacts) {
+    const email = normEmail(c.email);
+    if (email) {
+      byEmail.set(email, byEmail.has(email) ? pickPreferredContact(byEmail.get(email), c) : c);
+      continue;
+    }
+    const first = c.firstName?.toLowerCase().trim() || "";
+    const last = c.lastName?.toLowerCase().trim() || "";
+    const nameKey = first || last ? `${first}|${last}` : null;
+    if (nameKey) {
+      byName.set(nameKey, byName.has(nameKey) ? pickPreferredContact(byName.get(nameKey), c) : c);
+    } else {
+      noKey.push(c);
+    }
+  }
+
+  return [...byEmail.values(), ...byName.values(), ...noKey].sort((a, b) => {
+    if (Boolean(a.isPrimary) !== Boolean(b.isPrimary)) return a.isPrimary ? -1 : 1;
+    return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+  });
+};
