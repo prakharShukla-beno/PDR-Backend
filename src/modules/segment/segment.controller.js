@@ -60,9 +60,9 @@ const segmentController = {
   getAccounts: async (req, res, next) => {
     try {
       const companyId = getCompanyIdFromRequest(req);
-      const { page = 1, limit = 10 } = req.query;
+      const { page = 1, limit = 10, ...filterQuery } = req.query;
       const result = await segmentService.getStoredAccounts(
-        req.params.id, Number(page), Number(limit), companyId
+        req.params.id, Number(page), Number(limit), companyId, filterQuery
       );
       res.set("Cache-Control", "no-store, no-cache, must-revalidate");
       res.status(200).json({ success: true, data: result });

@@ -7,6 +7,18 @@ import { buildProspectMatchFilter } from "../icp/icp.service.js";
 import enrichmentService, { needsEnrichment } from "../enrichment/enrichment.service.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
 import { companyFilter } from "../../common/utils/tenantScope.js";
+import searchService from "../search/search.service.js";
+
+const PAGINATION_KEYS = new Set(["page", "limit"]);
+
+const hasSearchOrFilters = (query = {}) =>
+  Boolean(String(query.search || "").trim()) ||
+  Object.entries(query).some(([key, value]) => {
+    if (PAGINATION_KEYS.has(key)) return false;
+    if (value === undefined || value === null || value === "") return false;
+    if (Array.isArray(value)) return value.length > 0;
+    return true;
+  });
 
 const mergeCompanyQuery = (companyId, query = {}) => {
   const base = companyFilter(companyId, {});
@@ -210,13 +222,78 @@ const segmentService = {
     return await segmentRepository.findById(id, companyId);
   },
 
-  getStoredAccounts: async (id, page = 1, limit = 10, companyId) => {
+  getStoredAccounts: async (id, page = 1, limit = 10, companyId, query = {}) => {
     const segment = await segmentRepository.findById(id, companyId);
     if (!segment) throw new Error("Segment not found");
 
-    const total  = segment.matchedAccountIds.length;
+    const segmentIds = segment.matchedAccountIds || [];
+
+    // Tier / priority breakdown always reflects full segment membership
+    const tierAgg = await Prospect.aggregate([
+      { $match: { companyId, _id: { $in: segmentIds } } },
+      { $group: { _id: "$clvRanking", count: { $sum: 1 } } },
+      { $sort:  { _id: 1 } },
+    ]);
+
+    const tierBreakdown = {
+      "Tier-A (Strategic)": 0,
+      "Tier-B (Core)":      0,
+      "Tier-C (Mass)":      0,
+    };
+    tierAgg.forEach(t => {
+      if (t._id && tierBreakdown[t._id] !== undefined) tierBreakdown[t._id] = t.count;
+    });
+
+    const priorityAgg = await Prospect.aggregate([
+      { $match: { companyId, _id: { $in: segmentIds } } },
+      { $group: { _id: "$salesPriority", count: { $sum: 1 } } },
+      { $sort:  { _id: 1 } },
+    ]);
+
+    const priorityBreakdown = {
+      "P1 (Tier A+Active)": 0,
+      "P2 (Tier B+Active)": 0,
+      "P3 (Tier A+Cold)":   0,
+      "P4 (Tier B+Cold)":   0,
+    };
+    priorityAgg.forEach(p => {
+      if (p._id && priorityBreakdown[p._id] !== undefined) priorityBreakdown[p._id] = p.count;
+    });
+
+    const enrichMeta = {
+      enrichStatus:   segment.enrichStatus,
+      enrichedCount:  segment.enrichedCount,
+      scoredCount:    segment.scoredCount,
+      lastEnrichedAt: segment.lastEnrichedAt,
+    };
+
+    if (hasSearchOrFilters(query)) {
+      const result = await searchService.searchProspects(companyId, {
+        ...query,
+        ids: segmentIds,
+        page,
+        limit,
+      });
+
+      const accounts = (result.prospects || []).map((p) =>
+        typeof p.toObject === "function" ? p.toObject() : p
+      );
+
+      return {
+        accounts,
+        total:             result.pagination.total,
+        page:              result.pagination.page,
+        limit:             result.pagination.limit,
+        totalPages:        result.pagination.totalPages,
+        tierBreakdown,
+        priorityBreakdown,
+        ...enrichMeta,
+      };
+    }
+
+    const total  = segmentIds.length;
     const skip   = (page - 1) * limit;
-    const pageIds = segment.matchedAccountIds.slice(skip, skip + limit);
+    const pageIds = segmentIds.slice(skip, skip + limit);
 
     // Always fetch LIVE scores from Prospect — never use cached snapshot values
     const LIVE_ACCOUNT_FIELDS = [
@@ -243,39 +320,6 @@ const segmentService = {
       .map((pid) => byId[pid.toString()])
       .filter(Boolean);
 
-    // Tier breakdown — Tier A/B/C counts
-    const tierAgg = await Prospect.aggregate([
-      { $match: { companyId, _id: { $in: segment.matchedAccountIds } } },
-      { $group: { _id: "$clvRanking", count: { $sum: 1 } } },
-      { $sort:  { _id: 1 } },
-    ]);
-
-    const tierBreakdown = {
-      "Tier-A (Strategic)": 0,
-      "Tier-B (Core)":      0,
-      "Tier-C (Mass)":      0,
-    };
-    tierAgg.forEach(t => {
-      if (t._id && tierBreakdown[t._id] !== undefined) tierBreakdown[t._id] = t.count;
-    });
-
-    // Priority breakdown
-    const priorityAgg = await Prospect.aggregate([
-      { $match: { companyId, _id: { $in: segment.matchedAccountIds } } },
-      { $group: { _id: "$salesPriority", count: { $sum: 1 } } },
-      { $sort:  { _id: 1 } },
-    ]);
-
-    const priorityBreakdown = {
-      "P1 (Tier A+Active)": 0,
-      "P2 (Tier B+Active)": 0,
-      "P3 (Tier A+Cold)":   0,
-      "P4 (Tier B+Cold)":   0,
-    };
-    priorityAgg.forEach(p => {
-      if (p._id && priorityBreakdown[p._id] !== undefined) priorityBreakdown[p._id] = p.count;
-    });
-
     return {
       accounts,
       total,
@@ -284,10 +328,7 @@ const segmentService = {
       totalPages:        Math.ceil(total / limit),
       tierBreakdown,
       priorityBreakdown,
-      enrichStatus:      segment.enrichStatus,
-      enrichedCount:     segment.enrichedCount,
-      scoredCount:       segment.scoredCount,
-      lastEnrichedAt:    segment.lastEnrichedAt,
+      ...enrichMeta,
     };
   },
 
