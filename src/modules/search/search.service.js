@@ -2,7 +2,7 @@ import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
 import Segment from "../segment/segment.model.js";
 import Campaign from "../campaign/campaign.model.js";
-import { expandSectors } from "../../common/utils/industryMapper.js";
+import { buildPrimaryIndustryFilter } from "../../common/utils/industryMapper.js";
 import { companyFilter, companyUserIds } from "../../common/utils/tenantScope.js";
 import { resolveContactAccountLinks } from "../../common/utils/resolveContactAccountLinks.js";
 
@@ -35,6 +35,18 @@ const buildIncExcFilter = (inc, exc) => {
 const toArray = (val) => {
   if (!val) return [];
   return Array.isArray(val) ? val.filter(Boolean) : [val].filter(Boolean);
+};
+
+const intersectProspectIds = (existingIdFilter, allowedIds) => {
+  const allowed = new Set(toArray(allowedIds).map(String));
+  if (!allowed.size) return existingIdFilter || null;
+  if (existingIdFilter?.$in) {
+    const intersected = existingIdFilter.$in
+      .map((id) => id.toString())
+      .filter((id) => allowed.has(id));
+    return { $in: intersected };
+  }
+  return { $in: [...allowed] };
 };
 
 const REGION_COUNTRIES = {
@@ -85,6 +97,24 @@ const applyTechStackExclude = (filter, tools) => {
   });
 };
 
+const SCORE_BAND_CLAUSES = {
+  ">60":     (field) => ({ [field]: { $gt: 60 } }),
+  "30 - 59": (field) => ({ [field]: { $gte: 30, $lte: 59 } }),
+  "<30":     (field) => ({ [field]: { $lt: 30 } }),
+};
+
+const applyScoreBandFilter = (filter, field, bands) => {
+  const list = toArray(bands);
+  if (!list.length) return;
+  const clauses = list
+    .map((band) => SCORE_BAND_CLAUSES[band]?.(field))
+    .filter(Boolean);
+  if (!clauses.length) return;
+  filter.$and = filter.$and || [];
+  if (clauses.length === 1) filter.$and.push(clauses[0]);
+  else filter.$and.push({ $or: clauses });
+};
+
 const searchService = {
 
   // ===========================================================================
@@ -104,6 +134,9 @@ const searchService = {
       employeesInclude,     employeesExclude,
       revenueInclude,       revenueExclude,
       salesPriorityInclude, salesPriorityExclude,
+      icpTierInclude,         icpTierExclude,
+      icpSalesPriorityInclude, icpSalesPriorityExclude,
+      icpScoreBandInclude,    techFitScoreBandInclude,
       clvRankingInclude,    clvRankingExclude,
       intentSignalInclude,  intentSignalExclude,
       historyTriggerInclude,historyTriggerExclude,
@@ -131,6 +164,9 @@ const searchService = {
       // Boolean filters
       isDuplicate,
 
+      // Scope to specific prospect IDs (e.g. segment snapshot)
+      ids,
+
       // Pagination + sort
       page      = 1,
       limit     = 10,
@@ -156,8 +192,11 @@ const searchService = {
       if (f) filter[field] = f;
     };
 
-    // Expand sector name → all mapped industry values before querying DB
-    applyFilter("primaryIndustry", expandSectors(industryInclude), expandSectors(industryExclude));
+    const industryClause = buildPrimaryIndustryFilter(industryInclude, industryExclude);
+    if (industryClause) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(industryClause);
+    }
 
     // ── Region → country expansion ───────────────────────────────────────────
     const regionCountries = expandRegions(toArray(regionsInclude));
@@ -181,7 +220,14 @@ const searchService = {
     applyFilter("businessModel",       businessModelInclude,     businessModelExclude);
     applyFilter("noOfEmployees",       employeesInclude,         employeesExclude);
     applyFilter("annualRevenue",       revenueInclude,           revenueExclude);
-    applyFilter("salesPriority",       salesPriorityInclude,     salesPriorityExclude);
+    applyFilter("icpTier",             icpTierInclude,           icpTierExclude);
+    const priorityInc = toArray(icpSalesPriorityInclude).length
+      ? icpSalesPriorityInclude
+      : salesPriorityInclude;
+    const priorityExc = toArray(icpSalesPriorityExclude).length
+      ? icpSalesPriorityExclude
+      : salesPriorityExclude;
+    applyFilter("icpSalesPriority",    priorityInc,              priorityExc);
     applyFilter("clvRanking",          clvRankingInclude,        clvRankingExclude);
     applyFilter("intentSignal",        intentSignalInclude,      intentSignalExclude);
     applyFilter("historyTrigger",      historyTriggerInclude,    historyTriggerExclude);
@@ -196,6 +242,9 @@ const searchService = {
 
     applyTechStackInclude(filter, techStackInclude);
     applyTechStackExclude(filter, techStackExclude);
+
+    applyScoreBandFilter(filter, "icpFinalScore", icpScoreBandInclude);
+    applyScoreBandFilter(filter, "techFitScoreIcp", techFitScoreBandInclude);
 
     const techFitList = toArray(techFitScores).map(Number).filter((n) => !Number.isNaN(n));
     if (techFitList.length) {
@@ -240,16 +289,26 @@ const searchService = {
       filter._id = accountIds.length ? { $in: accountIds } : { $in: [] };
     }
 
-    // ── TechFit Score range ──────────────────────────────────────────────────
-    if (techFitScoreMin || techFitScoreMax) {
-      filter.techFitScore = {};
-      if (techFitScoreMin) filter.techFitScore.$gte = Number(techFitScoreMin);
-      if (techFitScoreMax) filter.techFitScore.$lte = Number(techFitScoreMax);
+    // ── TechFit Score range (legacy slider / segment builder) ────────────────
+    if (
+      !toArray(techFitScoreBandInclude).length &&
+      (techFitScoreMin || techFitScoreMax)
+    ) {
+      filter.techFitScoreIcp = filter.techFitScoreIcp || {};
+      if (techFitScoreMin) filter.techFitScoreIcp.$gte = Number(techFitScoreMin);
+      if (techFitScoreMax) filter.techFitScoreIcp.$lte = Number(techFitScoreMax);
     }
 
     // ── Boolean ──────────────────────────────────────────────────────────────
     if (isDuplicate !== undefined) {
       filter.isDuplicate = isDuplicate === "true";
+    }
+
+    // ── Restrict to a fixed set of prospect IDs ───────────────────────────────
+    const scopedIds = toArray(ids);
+    if (scopedIds.length) {
+      const idClause = intersectProspectIds(filter._id, scopedIds);
+      if (idClause) filter._id = idClause;
     }
 
     // ── Pagination + sort ────────────────────────────────────────────────────
@@ -345,8 +404,15 @@ const searchService = {
     applyFilter("city",             cityInclude,             cityExclude);
 
     // ── Account level filters (denormalized) ─────────────────────────────────
-    // Expand sector name → all mapped industry values before querying DB
-    applyFilter("accountIndustry", expandSectors(accountIndustryInclude), expandSectors(accountIndustryExclude));
+    const accountIndustryClause = buildPrimaryIndustryFilter(
+      accountIndustryInclude,
+      accountIndustryExclude,
+      "accountIndustry"
+    );
+    if (accountIndustryClause) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(accountIndustryClause);
+    }
     applyFilter("accountCountry",       accountCountryInclude,       accountCountryExclude);
     applyFilter("accountCity",          accountCityInclude,          accountCityExclude);
     applyFilter("accountEmployees",     accountEmployeesInclude,     accountEmployeesExclude);
@@ -444,8 +510,10 @@ const searchService = {
       countries:           clean(countries),
       cities:              clean(cities),
       businessModels:      clean(businessModels),
-      salesPriorities:     clean(salesPriorities),
-      clvRankings:         clean(clvRankings),
+      salesPriorities:     ["P1", "P2", "P3", "P4"],
+      icpTiers:            ["Tier A", "Tier B", "Tier C"],
+      scoreBands:          [">60", "30 - 59", "<30"],
+      clvRankings:         ["Tier-A (Strategic)", "Tier-B (Core)", "Tier-C (Mass)"],
       intentSignals:       clean(intentSignals),
       employeeBands:       clean(employeeBands),
       revenueBands:        clean(revenueBands),

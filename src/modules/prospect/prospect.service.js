@@ -4,7 +4,7 @@ import duplicateRepository from "../duplicate/duplicate.repository.js";
 import Contact from "../contacts/contact.model.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
 import { companyFilter } from "../../common/utils/tenantScope.js";
-import { expandSectors } from "../../common/utils/industryMapper.js";
+import { buildPrimaryIndustryFilter } from "../../common/utils/industryMapper.js";
 import pkg from "xlsx";
 const { utils, write } = pkg;
 
@@ -34,13 +34,12 @@ const toArray = (val) => {
 const buildIndustryFilter = (industry, primaryIndustry, industries) => {
   const fromList = toArray(industries);
   if (fromList.length > 0) {
-    const expanded = expandSectors(fromList);
-    return expanded.length === 1 ? expanded[0] : { $in: expanded };
+    return buildPrimaryIndustryFilter(fromList, []);
   }
   const raw = industry ?? primaryIndustry;
   if (!raw) return null;
-  const values = Array.isArray(raw) ? raw : [raw];
-  return values.length === 1 ? values[0] : { $in: values };
+  const values = toArray(raw);
+  return buildPrimaryIndustryFilter(values, []);
 };
 
 const applyTechStackInclude = (filter, tools) => {
@@ -139,7 +138,10 @@ const prospectService = {
     }
 
     const industryFilter = buildIndustryFilter(industry, primaryIndustry, industries);
-    if (industryFilter) filter.primaryIndustry = industryFilter;
+    if (industryFilter) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(industryFilter);
+    }
 
     const countryList = toArray(countries);
     if (countryList.length) {
@@ -493,7 +495,10 @@ ${contacts.length > 0
       ];
     }
     const industryFilter = buildIndustryFilter(industry, primaryIndustry);
-    if (industryFilter)  filter.primaryIndustry = industryFilter;
+    if (industryFilter) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(industryFilter);
+    }
     if (country)         filter.country         = { $regex: country, $options: "i" };
     if (salesPriority)   filter.salesPriority   = salesPriority;
     if (clvRanking)      filter.clvRanking      = clvRanking;

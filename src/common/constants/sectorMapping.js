@@ -1,4 +1,4 @@
-import { INDUSTRIES, SECTOR_TAXONOMY } from "./taxonomy.js";
+import { INDUSTRIES, SECTOR_TAXONOMY, getIndsInSector, getSubsInSector } from "./taxonomy.js";
 
 const normalizeKey = (value) =>
   String(value)
@@ -117,6 +117,29 @@ export const buildIndustryToSectorMap = () => {
   return map;
 };
 
+/** Known DB / import aliases for mapped industry labels */
+const INDUSTRY_ALIASES = {
+  "Social Security": ["Social Security (Financial Aspect)"],
+  "E-commerce": ["E-Commerce"],
+  "AI/ML": ["AI & ML"],
+  "Electricity/Thermal": ["Electricity, Thermal"],
+  "Hydro/Natural Gas": ["Hydro, Natural Gas"],
+};
+
+/**
+ * All values that should match when a commercial sector is selected in filters.
+ * Includes sector name, sub-sectors, mapped industries (ICP taxonomy), and legacy aliases.
+ */
+export const getMappedIndustriesForSector = (sector) => {
+  const taxonomy = getIndsInSector(sector);
+  const subs = getSubsInSector(sector);
+  const legacy = SECTOR_TO_INDUSTRIES[sector] || [];
+  const aliases = [...taxonomy, ...legacy].flatMap(
+    (v) => INDUSTRY_ALIASES[v] ?? []
+  );
+  return [...new Set([sector, ...subs, ...taxonomy, ...legacy, ...aliases])];
+};
+
 /**
  * Expand sector names OR pass through industry values for DB queries
  * 
@@ -133,16 +156,50 @@ export const expandSectors = (values) => {
   const expanded = [];
 
   arr.filter(Boolean).forEach((v) => {
-    if (SECTOR_TO_INDUSTRIES[v]) {
-      // It's a sector name — expand to all children
-      expanded.push(...SECTOR_TO_INDUSTRIES[v]);
+    if (SECTOR_TAXONOMY[v] || SECTOR_TO_INDUSTRIES[v]) {
+      expanded.push(...getMappedIndustriesForSector(v));
     } else {
-      // It's likely an industry value — pass through as-is
-      expanded.push(v);
+      expanded.push(v, ...(INDUSTRY_ALIASES[v] ?? []));
     }
   });
 
-  return [...new Set(expanded)]; // deduplicate
+  return [...new Set(expanded)];
+};
+
+const escapeRegex = (value) =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Case-insensitive industry filter for include / exclude lists.
+ * @param {string} field - Document field to match (primaryIndustry or accountIndustry)
+ */
+export const buildPrimaryIndustryFilter = (
+  includeValues = [],
+  excludeValues = [],
+  field = "primaryIndustry"
+) => {
+  const inc = expandSectors(includeValues);
+  const exc = expandSectors(excludeValues);
+  const clauses = [];
+
+  if (inc.length) {
+    clauses.push({
+      $or: inc.map((v) => ({
+        [field]: { $regex: `^${escapeRegex(v)}$`, $options: "i" },
+      })),
+    });
+  }
+
+  if (exc.length) {
+    clauses.push({
+      $nor: exc.map((v) => ({
+        [field]: { $regex: `^${escapeRegex(v)}$`, $options: "i" },
+      })),
+    });
+  }
+
+  if (!clauses.length) return null;
+  return clauses.length === 1 ? clauses[0] : { $and: clauses };
 };
 
 /**
