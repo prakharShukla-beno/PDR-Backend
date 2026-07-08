@@ -50,6 +50,38 @@ const TECH_ADOPTION_PROFILES = [
   "Innovator", "Early Adopter", "Mainstream", "Laggard", "Leapfrog",
 ];
 
+const BUSINESS_MODELS = [
+  "B2B", "B2C", "D2C", "E-Commerce", "B2B2C", "Marketplace",
+];
+
+const BUSINESS_MODEL_NORMALIZE = {
+  b2b: "B2B", "business to business": "B2B",
+  b2c: "B2C", "business to consumer": "B2C",
+  d2c: "D2C", "direct to consumer": "D2C",
+  "e-commerce": "E-Commerce", ecommerce: "E-Commerce", "e commerce": "E-Commerce",
+  b2b2c: "B2B2C", marketplace: "Marketplace",
+};
+
+const COMMERCIAL_CATEGORIES = [
+  "Product Led", "SaaS-Subscriptions", "Professional Services", "Retail-E-Com",
+];
+
+const COMMERCIAL_CATEGORY_NORMALIZE = {
+  "product led": "Product Led", "product-led": "Product Led",
+  "saas-subscriptions": "SaaS-Subscriptions", saas: "SaaS-Subscriptions",
+  "saas subscriptions": "SaaS-Subscriptions", subscriptions: "SaaS-Subscriptions",
+  "professional services": "Professional Services", services: "Professional Services",
+  "retail-e-com": "Retail-E-Com", retail: "Retail-E-Com", "retail e-com": "Retail-E-Com",
+};
+
+/** Map a free-text value to an allowed enum via a normalize map, else null */
+const pickEnumWithMap = (value, allowed, normalizeMap) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (allowed.includes(raw)) return raw;
+  return normalizeMap[raw.toLowerCase()] || null;
+};
+
 /** True when AI should still fill missing prospect fields */
 export const needsEnrichment = (prospect) => {
   if (!prospect) return false;
@@ -61,7 +93,9 @@ export const needsEnrichment = (prospect) => {
     !prospect.marginPotential ||
     !prospect.techAdoptionProfile ||
     !prospect.technologyAlignment ||
-    !prospect.primaryTechStack?.length
+    !prospect.primaryTechStack?.length ||
+    !prospect.country ||
+    !prospect.businessModel
   );
 };
 
@@ -208,6 +242,10 @@ Return ONLY this JSON structure with ALL fields populated (never omit a field):
   "icpMatch": true or false,
   "missingFieldSuggestions": {
     "primaryIndustry": "suggested industry string",
+    "country": "HQ country name (e.g. United States)",
+    "hqLocationCity": "HQ city name (e.g. Cupertino)",
+    "businessModel": "one exact business model from allowed list",
+    "commercialCategory": "one exact commercial category from allowed list",
     "annualRevenue": "one exact revenue bucket",
     "noOfEmployees": "one exact employee range",
     "techAdoptionProfile": "one exact adoption profile",
@@ -257,6 +295,18 @@ ALLOWED VALUES FOR OTHER FIELDS:
 
 "techAdoptionProfile" / missingFieldSuggestions.techAdoptionProfile — exactly one of:
   ${TECH_ADOPTION_PROFILES.map((s) => `"${s}"`).join(" | ")}
+
+"businessModel" / missingFieldSuggestions.businessModel — exactly one of:
+  ${BUSINESS_MODELS.map((s) => `"${s}"`).join(" | ")}
+
+"commercialCategory" / missingFieldSuggestions.commercialCategory — exactly one of:
+  ${COMMERCIAL_CATEGORIES.map((s) => `"${s}"`).join(" | ")}
+
+"country" / missingFieldSuggestions.country:
+  Full HQ country name (e.g. "United States", "India", "Germany").
+
+"hqLocationCity" / missingFieldSuggestions.hqLocationCity:
+  HQ city name only (e.g. "Cupertino", "Bengaluru").
 
 "primaryTechStack" / "techStack":
   Array of 4–10 specific tools (e.g. ["AWS", "Salesforce", "React", "PostgreSQL", "Docker"])
@@ -382,6 +432,32 @@ const enrichSingleProspect = async (prospectId, userId) => {
 
   if (!prospect.primaryIndustry && suggestions.primaryIndustry)
     updateData.primaryIndustry = suggestions.primaryIndustry;
+
+  const countryRaw = suggestions.country ?? parsed.country;
+  if (!prospect.country && countryRaw) {
+    const country = String(countryRaw).trim();
+    if (country && country.toLowerCase() !== "unknown") updateData.country = country;
+  }
+
+  const cityRaw = suggestions.hqLocationCity ?? parsed.hqLocationCity;
+  if (!prospect.hqLocationCity && cityRaw) {
+    const city = String(cityRaw).trim();
+    if (city && city.toLowerCase() !== "unknown") updateData.hqLocationCity = city;
+  }
+
+  const businessModelRaw = suggestions.businessModel ?? parsed.businessModel;
+  if (!prospect.businessModel && businessModelRaw) {
+    const businessModel = pickEnumWithMap(businessModelRaw, BUSINESS_MODELS, BUSINESS_MODEL_NORMALIZE);
+    if (businessModel) updateData.businessModel = businessModel;
+  }
+
+  const commercialCategoryRaw = suggestions.commercialCategory ?? parsed.commercialCategory;
+  if (!prospect.commercialCategory && commercialCategoryRaw) {
+    const commercialCategory = pickEnumWithMap(
+      commercialCategoryRaw, COMMERCIAL_CATEGORIES, COMMERCIAL_CATEGORY_NORMALIZE
+    );
+    if (commercialCategory) updateData.commercialCategory = commercialCategory;
+  }
 
   const revenueRaw = suggestions.annualRevenue ?? parsed.annualRevenue;
   if (!prospect.annualRevenue && revenueRaw) {

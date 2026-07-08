@@ -67,6 +67,13 @@ const segmentSchema = new mongoose.Schema(
       ref: "Prospect",
     }],
 
+    // Accounts manually added from the accounts page (not from ICP filter match).
+    // Preserved across Sync / Enrich & Score snapshot rebuilds.
+    manuallyAddedAccountIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Prospect",
+    }],
+
     // Total count of matched accounts
     matchCount: {
       type: Number,

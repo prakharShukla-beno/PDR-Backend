@@ -11,6 +11,7 @@ router.post("/preview",              segmentController.preview);
 router.post("/contacts",             segmentController.getContactsBySegments);  // ← NEW
 router.post("/:id/sync",             segmentController.sync);
 router.post("/:id/add-accounts",     segmentController.addAccounts);   // ← NEW
+router.post("/:id/remove-accounts",  segmentController.removeAccounts);
 router.post("/:id/enrich-score",     segmentController.enrichAndScore);  // NEW
 router.get("/:id/accounts",          segmentController.getAccounts);
 

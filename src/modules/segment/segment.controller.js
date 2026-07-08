@@ -97,10 +97,37 @@ const segmentController = {
       if (!Array.isArray(accountIds) || accountIds.length === 0) {
         return res.status(400).json({ success: false, message: "accountIds array required" });
       }
-      const segment = await segmentService.addAccounts(req.params.id, accountIds);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.addAccounts(
+        req.params.id,
+        accountIds,
+        companyId
+      );
       res.status(200).json({
         success: true,
         message: `${accountIds.length} account(s) added to segment`,
+        data: { matchCount: segment.matchCount },
+      });
+    } catch (error) { next(error); }
+  },
+
+  // POST /api/segments/:id/remove-accounts
+  // Selected account IDs ko segment se hatao — prospect DB se delete NAHI hoti
+  removeAccounts: async (req, res, next) => {
+    try {
+      const { accountIds } = req.body;
+      if (!Array.isArray(accountIds) || accountIds.length === 0) {
+        return res.status(400).json({ success: false, message: "accountIds array required" });
+      }
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.removeAccounts(
+        req.params.id,
+        accountIds,
+        companyId
+      );
+      res.status(200).json({
+        success: true,
+        message: `${accountIds.length} account(s) removed from segment`,
         data: { matchCount: segment.matchCount },
       });
     } catch (error) { next(error); }
