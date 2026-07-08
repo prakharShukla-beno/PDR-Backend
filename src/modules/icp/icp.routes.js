@@ -109,18 +109,12 @@ const icpValidation = [
   body("techCategoriesExclude")
     .optional()
     .isArray().withMessage("techCategoriesExclude must be an array"),
-
-  body("isBenchmark")
-    .optional()
-    .isBoolean().withMessage("isBenchmark must be a boolean"),
 ];
 
 router.post("/",                        editorPlus, icpValidation, icpController.create);
 router.get("/",                         viewerPlus, icpController.getAll);
-router.get("/benchmark",                viewerPlus, icpController.getBenchmark);
 router.get("/:id",                      viewerPlus, icpController.getById);
 router.put("/:id",                      editorPlus, icpValidation, icpController.update);
-router.put("/:id/set-benchmark",        adminOnly,  icpController.setBenchmark);
 router.delete("/:id",                   adminOnly,  icpController.delete);
 router.post("/:id/create-segment",      editorPlus, icpController.createSegment);
 router.get("/:id/match-prospects",      viewerPlus, icpController.matchProspects);

@@ -25,42 +25,33 @@ const toPillarBreakdown = (scoreResult) => ({
 });
 
 /**
- * Get the benchmark ICP for a company.
- * Returns null if no benchmark is set.
+ * Resolve the ICP a prospect should be scored against.
+ * There is NO global benchmark — an account is scored against the ICP it was
+ * last matched/segmented with (persisted on prospect.icpBenchmarkRef).
+ * Uses a cache to avoid reloading the same ICP repeatedly in bulk operations.
  */
-export const getBenchmarkIcp = async (companyId) => {
-  return await ICP.findOne({
-    companyId,
-    isBenchmark: true,
-    isActive: true,
-  }).lean();
+const loadIcpById = async (icpId, companyId, cache) => {
+  if (!icpId) return null;
+  const key = icpId.toString();
+  if (cache && cache.has(key)) return cache.get(key);
+  const icp = await ICP.findOne({ _id: icpId, companyId, isActive: true }).lean();
+  if (cache) cache.set(key, icp);
+  return icp;
 };
 
 /**
  * Calculate and save ICP score for a SINGLE prospect.
  * Used after: single AI enrichment, single account create.
+ *
+ * @param icpOverride - explicit ICP to score against (e.g. a segment's ICP).
+ *                      When omitted, falls back to the prospect's last-matched
+ *                      ICP (icpBenchmarkRef). If neither exists, scoring is skipped.
  */
 export const scoreOneProsect = async (
   prospectId,
   companyId,
-  benchmarkIcp = null
+  icpOverride = null
 ) => {
-  const icp = benchmarkIcp || await getBenchmarkIcp(companyId);
-
-  if (!icp) {
-    await Prospect.findByIdAndUpdate(prospectId, {
-      icpMatchScore:    null,
-      icpFinalScore:    null,
-      techFitScoreIcp:  null,
-      techFitBand:      null,
-      icpTier:          null,
-      icpSalesPriority: null,
-      icpScoreStale:    true,
-      salesPriority:    null,
-    });
-    return { skipped: true, reason: "No benchmark ICP" };
-  }
-
   const prospect = await Prospect.findOne({
     _id: prospectId,
     companyId,
@@ -68,6 +59,14 @@ export const scoreOneProsect = async (
 
   if (!prospect) {
     return { skipped: true, reason: "Prospect not found" };
+  }
+
+  const icp =
+    icpOverride ||
+    (await loadIcpById(prospect.icpBenchmarkRef, companyId));
+
+  if (!icp) {
+    return { skipped: true, reason: "No ICP context for prospect" };
   }
 
   const scoreResult = await calculateIcpMatchScore(prospect, icp, Contact);
@@ -93,39 +92,19 @@ export const scoreOneProsect = async (
 
 /**
  * Calculate and save ICP scores for MULTIPLE prospects.
- * Used after: Excel import (batch), Re-Tier All.
+ * Used after: segment creation / Re-Tier.
+ *
+ * @param icpOverride - explicit ICP to score every prospect against (e.g. a
+ *                      segment's source ICP). When omitted, each prospect is
+ *                      scored against its own last-matched ICP (icpBenchmarkRef).
+ *                      Prospects without any ICP context are skipped.
  */
 export const scoreManyProspects = async (
   prospectIds,
   companyId,
-  benchmarkIcp = null
+  icpOverride = null
 ) => {
-  const icp = benchmarkIcp || await getBenchmarkIcp(companyId);
-
-  if (!icp) {
-    await Prospect.updateMany(
-      { _id: { $in: prospectIds }, companyId },
-      {
-        $set: {
-          icpMatchScore:    null,
-          icpFinalScore:    null,
-          techFitScoreIcp:  null,
-          techFitBand:      null,
-          icpTier:          null,
-          icpSalesPriority: null,
-          icpScoreStale:    true,
-          salesPriority:    null,
-        },
-      }
-    );
-    return {
-      scored:  0,
-      skipped: prospectIds.length,
-      total:   prospectIds.length,
-      reason:  "No benchmark ICP set",
-    };
-  }
-
+  const icpCache = new Map();
   let scored  = 0;
   let skipped = 0;
 
@@ -140,6 +119,14 @@ export const scoreManyProspects = async (
     const batchResults = await Promise.all(
       prospects.map(async (prospect) => {
         try {
+          const icp =
+            icpOverride ||
+            (await loadIcpById(prospect.icpBenchmarkRef, companyId, icpCache));
+
+          if (!icp) {
+            return { ok: false, noIcp: true };
+          }
+
           const scoreResult = await calculateIcpMatchScore(
             prospect,
             icp,
@@ -158,13 +145,6 @@ export const scoreManyProspects = async (
             intentSignal:   prospect.intentSignal,
             benchmarkIcpId: icp._id,
           });
-
-          console.log(
-            `Scoring ${prospect.accountName}: ` +
-            `ICP=${scoreResult.icpMatchScore}, ` +
-            `TechFit=${techFitScore}, ` +
-            `Final=${update.icpFinalScore}`
-          );
 
           return {
             ok: true,
@@ -212,12 +192,15 @@ export const scoreManyProspects = async (
 };
 
 /**
- * Score ALL prospects for a company (Re-Tier All).
+ * Re-score ALL prospects for a company (Re-Tier All).
+ * Each prospect is re-scored against its own last-matched ICP.
+ * Prospects that were never matched against any ICP are skipped.
  */
 export const scoreAllProspectsForCompany = async (companyId) => {
-  const icp = await getBenchmarkIcp(companyId);
-
-  const prospects = await Prospect.find({ companyId })
+  const prospects = await Prospect.find({
+    companyId,
+    icpBenchmarkRef: { $ne: null },
+  })
     .select("_id")
     .lean();
 
@@ -229,28 +212,8 @@ export const scoreAllProspectsForCompany = async (companyId) => {
 
   console.log(
     `Re-Tier All: scoring ${prospectIds.length} ` +
-    `prospects for company ${companyId}`
+    `prospects for company ${companyId} against their matched ICPs`
   );
 
-  return await scoreManyProspects(prospectIds, companyId, icp);
-};
-
-/**
- * Mark ALL prospects for a company as stale (or rescore immediately).
- */
-export const invalidateIcpScores = async (
-  companyId,
-  rescoreImmediately = false
-) => {
-  if (rescoreImmediately) {
-    await scoreAllProspectsForCompany(companyId);
-  } else {
-    await Prospect.updateMany(
-      { companyId },
-      { $set: { icpScoreStale: true } }
-    );
-    console.log(
-      `ICP scores marked stale for company ${companyId}`
-    );
-  }
+  return await scoreManyProspects(prospectIds, companyId);
 };

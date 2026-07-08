@@ -126,15 +126,11 @@ const icpSchema = new mongoose.Schema(
       ref: "Company",
       default: null,
     },
-
-    // Company benchmark ICP — only one may be true (enforced in service layer)
-    isBenchmark: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
 icpSchema.index({ companyId: 1 });
-icpSchema.index({ companyId: 1, isBenchmark: 1 });
 
 const ICP = mongoose.model("ICP", icpSchema);
 export default ICP;
