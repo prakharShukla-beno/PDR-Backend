@@ -167,7 +167,7 @@ const prospectSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ── ICP Match Score (from Benchmark ICP) ─────────────────────────────────
+    // ── ICP Match Score (against the ICP this account was last matched with) ──
     icpMatchScore: {
       type: Number,
       min: 0,

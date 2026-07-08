@@ -1,5 +1,4 @@
 import icpRepository from "./icp.repository.js";
-import ICP from "./icp.model.js";
 import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
 import segmentRepository from "../segment/segment.repository.js";
@@ -8,7 +7,6 @@ import {
   buildIcpScoreUpdate,
   resolveTechFitScore,
 } from "../../common/utils/icpScoreHelpers.js";
-import { invalidateIcpScores } from "../../common/services/icpScoreService.js";
 import { companyFilter, companyMatchStage } from "../../common/utils/tenantScope.js";
 
 const REGION_COUNTRIES = {
@@ -276,7 +274,7 @@ const ALLOWED_ICP_FIELDS = [
   "commercialCategories", "targetRegionsInclude", "targetRegionsExclude",
   "targetRegionCountriesExclude", "targetCountriesInclude", "targetCountriesExclude",
   "techStackInclude", "techStackExclude", "techCategoriesInclude", "techCategoriesExclude",
-  "buyerPersona", "isActive", "isBenchmark",
+  "buyerPersona", "isActive",
 ];
 
 const normalizeBuyerPersona = (persona = {}) => ({
@@ -552,7 +550,6 @@ const icpService = {
       icpProfile: {
         id: profile._id,
         name: profile.name,
-        isBenchmark: profile.isBenchmark || false,
       },
       prospects:  responseProspects,
       diagnosis,
@@ -563,31 +560,6 @@ const icpService = {
         totalPages: Math.ceil(total / Number(limit)),
       },
     };
-  },
-
-  setBenchmark: async (id, companyId) => {
-    await ICP.updateMany({ companyId }, { isBenchmark: false });
-
-    const profile = await icpRepository.update(id, { isBenchmark: true }, companyId);
-    if (!profile) {
-      const error = new Error("ICP profile not found");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    invalidateIcpScores(companyId, false).catch((err) =>
-      console.error(
-        "ICP invalidation after benchmark change failed:",
-        err.message
-      )
-    );
-
-    return profile;
-  },
-
-  getBenchmark: async (companyId) => {
-    return await ICP.findOne({ isBenchmark: true, companyId })
-      .populate("createdBy", "name email");
   },
 
   // ── Create segment from ICP matching prospects (one-click) ────────────────

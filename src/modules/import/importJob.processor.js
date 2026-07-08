@@ -13,10 +13,6 @@ import {
 } from "../../common/utils/contactImportHelpers.js";
 import { calculateScore } from "../../common/utils/scoring.js";
 import {
-  scoreManyProspects,
-  getBenchmarkIcp,
-} from "../../common/services/icpScoreService.js";
-import {
   buildContactDedupIndexes,
   findDbContactDuplicate,
   registerInFileRow,
@@ -722,44 +718,16 @@ export const processImportJob = async (jobId, companyId, userId) => {
         }
       }
 
-      if (scoringUpdates.length > 0) {
-        await Prospect.bulkWrite(scoringUpdates, { ordered: false });
-      }
+    if (scoringUpdates.length > 0) {
+      await Prospect.bulkWrite(scoringUpdates, { ordered: false });
+    }
     } catch (err) {
       console.error("Post-import scoring error:", err.message);
     }
 
-    // ── ICP Score new prospects ──────────────────────────────────────────────
-    try {
-      if (insertedProspectIds.length > 0) {
-        const benchmarkIcp = await getBenchmarkIcp(companyId);
-
-        if (benchmarkIcp) {
-          const newIds = insertedProspectIds.map((id) => id.toString());
-          const icpResult = await scoreManyProspects(
-            newIds,
-            companyId,
-            benchmarkIcp
-          );
-          console.log(
-            `Post-import ICP scoring: ` +
-            `${icpResult.scored}/${icpResult.total} scored`
-          );
-        } else {
-          await Prospect.updateMany(
-            { _id: { $in: insertedProspectIds } },
-            { $set: { icpScoreStale: true } }
-          );
-          console.log(
-            `Post-import: no benchmark ICP — ` +
-            `${insertedProspectIds.length} prospects marked stale`
-          );
-        }
-      }
-    } catch (err) {
-      console.error("Post-import ICP scoring failed:", err.message);
-    }
-    // ── end ICP scoring ────────────────────────────────────────────────────
+    // NOTE: No ICP scoring on import. There is no global benchmark ICP —
+    // accounts are scored against an ICP only when the user matches them
+    // against one / builds a segment from an ICP.
   }
 
   console.log(

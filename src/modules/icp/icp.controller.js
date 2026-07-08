@@ -162,38 +162,6 @@ const icpController = {
     }
   },
 
-  // GET /api/icp/benchmark — get company benchmark ICP
-  getBenchmark: async (req, res, next) => {
-    try {
-      const companyId = getCompanyIdFromRequest(req);
-      const profile = await icpService.getBenchmark(companyId);
-      if (!profile) {
-        return res.status(404).json({
-          success: false,
-          message: "No benchmark ICP set",
-        });
-      }
-      res.status(200).json({ success: true, data: profile });
-    } catch (error) {
-      next(error);
-    }
-  },
-
-  // PUT /api/icp/:id/set-benchmark — mark ICP as company benchmark
-  setBenchmark: async (req, res, next) => {
-    try {
-      const companyId = getCompanyIdFromRequest(req);
-      const profile = await icpService.setBenchmark(req.params.id, companyId);
-      res.status(200).json({
-        success: true,
-        message: "ICP set as benchmark successfully",
-        data: profile,
-      });
-    } catch (error) {
-      next(error);
-    }
-  },
-
   // GET /api/icp/:id/match-persona — find best POC using buyer persona
   matchBuyerPersona: async (req, res, next) => {
     try {
