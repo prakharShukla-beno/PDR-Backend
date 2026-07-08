@@ -1,5 +1,6 @@
 import { validationResult } from "express-validator";
 import icpService from "./icp.service.js";
+import segmentService from "../segment/segment.service.js";
 import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const icpController = {
@@ -136,6 +137,34 @@ const icpController = {
       res.status(201).json({
         success: true,
         message: `Segment created with ${segment.matchCount} matching accounts`,
+        data: segment,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /api/icp/:id/add-to-segment — add all ICP matches to an existing segment
+  addToSegment: async (req, res, next) => {
+    try {
+      const { segmentId } = req.body;
+      if (!segmentId) {
+        return res.status(400).json({
+          success: false,
+          message: "segmentId is required",
+        });
+      }
+
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.addIcpMatchesToSegment(
+        segmentId,
+        req.params.id,
+        companyId
+      );
+
+      res.status(200).json({
+        success: true,
+        message: `Matching accounts added to segment (${segment.matchCount} total)`,
         data: segment,
       });
     } catch (error) {

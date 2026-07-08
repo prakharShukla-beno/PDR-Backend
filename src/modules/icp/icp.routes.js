@@ -117,6 +117,7 @@ router.get("/:id",                      viewerPlus, icpController.getById);
 router.put("/:id",                      editorPlus, icpValidation, icpController.update);
 router.delete("/:id",                   adminOnly,  icpController.delete);
 router.post("/:id/create-segment",      editorPlus, icpController.createSegment);
+router.post("/:id/add-to-segment",     editorPlus, icpController.addToSegment);
 router.get("/:id/match-prospects",      viewerPlus, icpController.matchProspects);
 router.get("/:id/match-persona",        viewerPlus, icpController.matchBuyerPersona);
 

@@ -5,11 +5,20 @@ import Contact              from "../contacts/contact.model.js";
 import ICP                  from "../icp/icp.model.js";
 import { buildProspectMatchFilter } from "../icp/icp.service.js";
 import enrichmentService, { needsEnrichment } from "../enrichment/enrichment.service.js";
+import { scoreManyProspects } from "../../common/services/icpScoreService.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
 import { companyFilter } from "../../common/utils/tenantScope.js";
 import searchService from "../search/search.service.js";
 
 const PAGINATION_KEYS = new Set(["page", "limit"]);
+
+/** Union ICP-filter matches with manually-added accounts so Sync/Enrich won't drop them */
+const mergeSnapshotWithManualAdds = (filterMatchedIds, segment) => {
+  const manualIds = (segment?.manuallyAddedAccountIds || []).map((id) => id.toString());
+  const merged = new Set(filterMatchedIds.map((id) => id.toString()));
+  manualIds.forEach((id) => merged.add(id));
+  return [...merged];
+};
 
 const hasSearchOrFilters = (query = {}) =>
   Boolean(String(query.search || "").trim()) ||
@@ -192,7 +201,10 @@ const segmentService = {
         ? buildProspectMatchFilter(icpProfile)
         : segmentService.buildQuery(data.filters, icpProfile);
       const prospects = await Prospect.find(mergeCompanyQuery(companyId, query)).select("_id").lean();
-      const ids       = prospects.map(p => p._id);
+      const ids       = mergeSnapshotWithManualAdds(
+        prospects.map((p) => p._id),
+        segment
+      );
       await segmentRepository.saveSnapshot(id, ids, companyId);
     }
 
@@ -216,7 +228,10 @@ const segmentService = {
       ? buildProspectMatchFilter(icpProfile)
       : segmentService.buildQuery(segment.filters, icpProfile);
     const prospects = await Prospect.find(mergeCompanyQuery(companyId, query)).select("_id").lean();
-    const ids       = prospects.map(p => p._id);
+    const ids       = mergeSnapshotWithManualAdds(
+      prospects.map((p) => p._id),
+      segment
+    );
     await segmentRepository.saveSnapshot(id, ids, companyId);
 
     return await segmentRepository.findById(id, companyId);
@@ -518,6 +533,33 @@ const segmentService = {
           }
         }
 
+        // ── ICP scoring against this segment's ICP ────────────────────────────
+        // Fills icpMatchScore / icpFinalScore / icpTier / icpSalesPriority /
+        // techFitScoreIcp / techFitBand and persists icpBenchmarkRef so the
+        // segment table (Tech Fit Ranking, ICP Score, ICP Ranking, Priority)
+        // reflects the ICP this segment was built from. Runs AFTER the CLV loop
+        // so ICP sales priority is the final salesPriority value.
+        if (icpProfile) {
+          try {
+            const icpResult = await scoreManyProspects(
+              segment.matchedAccountIds.map((id) => id.toString()),
+              companyId,
+              icpProfile
+            );
+            console.log(
+              `Segment ${segmentId} ICP scoring: ` +
+              `${icpResult.scored}/${icpResult.total} scored against ICP ${icpProfile.name}`
+            );
+          } catch (icpErr) {
+            errors.push(`ICP scoring failed: ${icpErr.message}`);
+          }
+        } else {
+          console.log(
+            `Segment ${segmentId} has no ICP — skipping ICP scoring ` +
+            `(CLV scores still applied)`
+          );
+        }
+
         // Final status update
         const finalStatus = errors.length === 0 ? "done" : "partial";
         await segmentRepository.update(segmentId, {
@@ -531,7 +573,12 @@ const segmentService = {
           ? buildProspectMatchFilter(icpProfile)
           : segmentService.buildQuery(segment.filters, icpProfile);
         const prospects = await Prospect.find(mergeCompanyQuery(companyId, query)).select("_id").lean();
-        await segmentRepository.saveSnapshot(segmentId, prospects.map(p => p._id), companyId);
+        const freshSegment = await segmentRepository.findById(segmentId, companyId);
+        const mergedIds = mergeSnapshotWithManualAdds(
+          prospects.map((p) => p._id),
+          freshSegment
+        );
+        await segmentRepository.saveSnapshot(segmentId, mergedIds, companyId);
 
         console.log(`✅ Segment ${segmentId} enriched — ${scoredCount}/${totalAccounts} scored`);
 
@@ -550,27 +597,119 @@ const segmentService = {
     };
   },
   // ─── Add accounts to existing segment (manual add from accounts page) ────────
-  // Existing matchedAccountIds mein naye IDs merge karo — duplicates nahi honge
-  addAccounts: async (segmentId, accountIds) => {
-    const segment = await segmentRepository.findById(segmentId);
+  // Merges into matchedAccountIds, tracks manuallyAddedAccountIds, and scores
+  // new accounts immediately against this segment's ICP (if one is linked).
+  addAccounts: async (segmentId, accountIds, companyId) => {
+    const segment = await segmentRepository.findById(segmentId, companyId);
     if (!segment) {
       const err = new Error("Segment not found");
       err.statusCode = 404;
       throw err;
     }
 
-    // Existing IDs (string) + new IDs — deduplicate
-    const existingSet = new Set(
-      segment.matchedAccountIds.map((id) => id.toString())
+    const existingMatched = new Set(
+      (segment.matchedAccountIds || []).map((id) => id.toString())
     );
-    accountIds.forEach((id) => existingSet.add(id.toString()));
+    const existingManual = new Set(
+      (segment.manuallyAddedAccountIds || []).map((id) => id.toString())
+    );
 
-    const mergedIds = [...existingSet];
+    const newIds = [];
+    for (const id of accountIds) {
+      const key = id.toString();
+      if (!existingMatched.has(key)) {
+        newIds.push(key);
+        existingMatched.add(key);
+      }
+      existingManual.add(key);
+    }
+
+    const mergedIds = [...existingMatched];
+    const mergedManual = [...existingManual];
+
+    const updated = await segmentRepository.update(segmentId, {
+      matchedAccountIds: mergedIds,
+      manuallyAddedAccountIds: mergedManual,
+      matchCount: mergedIds.length,
+    }, companyId);
+
+    let icpProfile = null;
+    if (segment.icpId) {
+      icpProfile = await ICP.findOne({ _id: segment.icpId, companyId }).lean();
+    }
+
+    if (icpProfile && newIds.length > 0) {
+      try {
+        const icpResult = await scoreManyProspects(newIds, companyId, icpProfile);
+        console.log(
+          `addAccounts: ICP scored ${icpResult.scored}/${icpResult.total} ` +
+          `new account(s) against ICP "${icpProfile.name}"`
+        );
+      } catch (icpErr) {
+        console.error(`addAccounts: ICP scoring failed:`, icpErr.message);
+      }
+    }
+
+    return updated;
+  },
+
+  // ─── Add all ICP-matching prospects to an existing segment ─────────────────
+  addIcpMatchesToSegment: async (segmentId, icpId, companyId) => {
+    const segment = await segmentRepository.findById(segmentId, companyId);
+    if (!segment) {
+      const err = new Error("Segment not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const icpProfile = await ICP.findOne({ _id: icpId, companyId }).lean();
+    if (!icpProfile) {
+      const err = new Error("ICP profile not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const icpFilter = buildProspectMatchFilter(icpProfile);
+    const filter = Object.keys(icpFilter).length > 0
+      ? { $and: [companyFilter(companyId, {}), icpFilter] }
+      : companyFilter(companyId, {});
+    const prospects = await Prospect.find(filter).select("_id").lean();
+    const ids = prospects.map((p) => p._id.toString());
+
+    if (ids.length === 0) {
+      const err = new Error("No prospects match this ICP.");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    return await segmentService.addAccounts(segmentId, ids, companyId);
+  },
+
+  // ─── Remove accounts from segment (does NOT delete the prospect from DB) ─────
+  // Sirf segment membership se hataata hai — account accounts page pe rahega.
+  removeAccounts: async (segmentId, accountIds, companyId) => {
+    const segment = await segmentRepository.findById(segmentId, companyId);
+    if (!segment) {
+      const err = new Error("Segment not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const removeSet = new Set(accountIds.map((id) => id.toString()));
+
+    const mergedIds = (segment.matchedAccountIds || [])
+      .map((id) => id.toString())
+      .filter((id) => !removeSet.has(id));
+
+    const mergedManual = (segment.manuallyAddedAccountIds || [])
+      .map((id) => id.toString())
+      .filter((id) => !removeSet.has(id));
 
     return await segmentRepository.update(segmentId, {
       matchedAccountIds: mergedIds,
+      manuallyAddedAccountIds: mergedManual,
       matchCount: mergedIds.length,
-    });
+    }, companyId);
   },
 
   // ─── Get deduped contacts for one or more segments ────────────────────────
