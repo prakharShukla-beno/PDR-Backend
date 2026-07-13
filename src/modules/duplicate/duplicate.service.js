@@ -395,6 +395,92 @@ const duplicateService = {
 
     return results;
   },
+
+  checkDuplicates: async (companyId, importLogId = null) => {
+    const cid = companyObjectId(companyId);
+    const filter = { companyId: cid };
+    if (importLogId) filter.importLogId = importLogId;
+
+    const prospects = await Prospect.find(filter)
+      .select("_id accountName website importLogId")
+      .lean();
+
+    let duplicateCount = 0;
+    const BATCH = 500;
+
+    for (let i = 0; i < prospects.length; i += BATCH) {
+      const batch = prospects.slice(i, i + BATCH);
+      const names = batch.map((p) => p.accountName).filter(Boolean);
+      const websites = batch.map((p) => p.website).filter(Boolean);
+      const batchIds = batch.map((p) => p._id);
+
+      const matches = await Prospect.find({
+        companyId: cid,
+        _id: { $nin: batchIds },
+        $or: [
+          ...(names.length ? [{ accountName: { $in: names } }] : []),
+          ...(websites.length ? [{ website: { $in: websites } }] : []),
+        ],
+      })
+        .select("_id accountName website")
+        .lean();
+
+      const matchByName = new Map();
+      const matchByWebsite = new Map();
+      for (const m of matches) {
+        if (m.accountName) {
+          matchByName.set(m.accountName.toLowerCase(), m);
+        }
+        if (m.website) {
+          matchByWebsite.set(m.website.toLowerCase(), m);
+        }
+      }
+
+      for (const p of batch) {
+        const nameKey = p.accountName?.toLowerCase();
+        const siteKey = p.website?.toLowerCase();
+        const nameMatch = nameKey ? matchByName.get(nameKey) : null;
+        const websiteMatch = siteKey ? matchByWebsite.get(siteKey) : null;
+        const existing = nameMatch || websiteMatch;
+
+        if (!existing) continue;
+
+        const matchFields = [
+          nameMatch && "accountName",
+          websiteMatch && "website",
+        ].filter(Boolean);
+
+        duplicateCount++;
+
+        await Prospect.findByIdAndUpdate(p._id, {
+          isDuplicate: true,
+        });
+
+        try {
+          await duplicateRepository.create({
+            prospectId1: existing._id,
+            entityType: "Prospect",
+            newData: {
+              accountName: p.accountName,
+              website: p.website,
+            },
+            matchFields,
+            source: "import",
+            importLogId: p.importLogId || importLogId || null,
+            status: "pending",
+            companyId: cid,
+          });
+        } catch {
+          // skip duplicate-of-duplicate record conflicts
+        }
+      }
+    }
+
+    return {
+      checked: prospects.length,
+      duplicateCount,
+    };
+  },
 };
 
 export default duplicateService;

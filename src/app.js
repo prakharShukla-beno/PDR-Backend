@@ -14,7 +14,6 @@ import "./modules/contacts/contact.model.js";
 import "./modules/campaign/campaign.model.js";
 import "./modules/importLog/importLog.model.js";
 import "./modules/import/importJob.model.js";
-import "./modules/import/stagedRow.model.js";
 import "./modules/interaction/interaction.model.js";
 import "./modules/enrichment/enrichment.model.js";
 import "./modules/notification/notification.model.js";

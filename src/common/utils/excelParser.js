@@ -298,10 +298,6 @@ export const normalizeEmployeeRange = (value, accountName = "") => {
   const direct = EMPLOYEE_RANGE_NORMALIZE[trimmed] ||
     EMPLOYEE_RANGE_NORMALIZE[trimmed.replace(/\s/g, "")];
   if (direct) {
-    console.warn(
-      `Employee range "${value}" normalized to "${direct}"` +
-      (accountName ? ` for ${accountName}` : "")
-    );
     return direct;
   }
 
@@ -317,11 +313,6 @@ export const normalizeEmployeeRange = (value, accountName = "") => {
   if (max >= 11)    return "11-50";
   if (max >= 1)     return "1-10";
 
-  console.warn(
-    `Unrecognized employee range "${value}"` +
-    (accountName ? ` for ${accountName}` : "") +
-    " — set to null"
-  );
   return null;
 };
 
@@ -383,7 +374,7 @@ const enrichContactFromAliases = (rawRow, contact) => {
   return contact;
 };
 
-const mapRowToSchema = (rawRow) => {
+const mapRowToSchema = (rawRow, { skipContacts = false } = {}) => {
   const mapped = {};
   const contact = {};
 
@@ -394,6 +385,7 @@ const mapRowToSchema = (rawRow) => {
     if (!schemaField) continue;
 
     if (schemaField.startsWith("contact.")) {
+      if (skipContacts) continue;
       const contactField = schemaField.split(".")[1];
       if (value !== null && value !== "") {
         contact[contactField] = String(value).trim();
@@ -405,23 +397,25 @@ const mapRowToSchema = (rawRow) => {
     }
   }
 
-  // ── Client format: POC-First Name + POC-Last Name → merge into name field
-  if (contact.firstName || contact.lastName) {
-    const fullName = [contact.firstName, contact.lastName]
-      .filter(Boolean).join(" ").trim();
-    if (fullName) contact.name = fullName;
-    delete contact.firstName;
-    delete contact.lastName;
-  }
+  if (!skipContacts) {
+    // ── Client format: POC-First Name + POC-Last Name → merge into name field
+    if (contact.firstName || contact.lastName) {
+      const fullName = [contact.firstName, contact.lastName]
+        .filter(Boolean).join(" ").trim();
+      if (fullName) contact.name = fullName;
+      delete contact.firstName;
+      delete contact.lastName;
+    }
 
-  enrichContactFromAliases(rawRow, contact);
+    enrichContactFromAliases(rawRow, contact);
 
-  if (
-    contact.name || contact.email || contact.phone ||
-    contact.designation || contact.department || contact.seniority
-  ) {
-    contact.isPrimary = true;
-    mapped.contacts = [contact];
+    if (
+      contact.name || contact.email || contact.phone ||
+      contact.designation || contact.department || contact.seniority
+    ) {
+      contact.isPrimary = true;
+      mapped.contacts = [contact];
+    }
   }
 
   // Parse comma-separated tech values into arrays
@@ -436,10 +430,6 @@ const mapRowToSchema = (rawRow) => {
   const accountName = inferAccountName(rawRow, mapped);
   if (accountName) {
     mapped.accountName = accountName;
-  } else if (!pickColumnByAliases(rawRow, ACCOUNT_NAME_HEADER_ALIASES) && !mapped.website) {
-    console.warn(
-      "No Account Name column found — accountName will be empty for this row. Row will be skipped."
-    );
   }
 
   applyEmployeeRangeNormalization(mapped);
@@ -690,12 +680,12 @@ export const parseExcelFile = (buffer) => {
 };
 
 /** Validate + normalize a single raw Excel row (reuses existing mapping rules) */
-export const validateAndNormalizeRow = (rawRow, rowNumber = 2) => {
+export const validateAndNormalizeRow = (rawRow, rowNumber = 2, options = {}) => {
   if (isRowEmpty(rawRow)) {
     return { isValid: false, normalizedRow: null, reason: "Empty row" };
   }
 
-  const mappedRow = sanitizeProspectRow(mapRowToSchema(rawRow));
+  const mappedRow = sanitizeProspectRow(mapRowToSchema(rawRow, options));
   const errors = validateRow(mappedRow, rowNumber);
 
   if (errors.length > 0) {
