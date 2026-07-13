@@ -72,6 +72,27 @@ const duplicateController = {
     } catch (error) { next(error); }
   },
 
+  // POST /api/duplicates/check — scan prospects for duplicates
+  checkDuplicates: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const { importLogId } = req.body || {};
+
+      const result = await duplicateService.checkDuplicates(
+        companyId,
+        importLogId || null
+      );
+
+      res.status(200).json({
+        success: true,
+        message: `Duplicate check complete — ${result.duplicateCount} found`,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // POST /api/duplicates/bulk — bulk action on multiple IDs
   bulkAction: async (req, res, next) => {
     try {

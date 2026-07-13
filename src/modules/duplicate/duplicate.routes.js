@@ -7,8 +7,9 @@ const router = Router();
 router.use(authMiddleware);
 
 router.get("/",              editorPlus, duplicateController.getAll);
-router.get("/:id",           editorPlus, duplicateController.getById);
+router.post("/check",        editorPlus, duplicateController.checkDuplicates);
 router.post("/bulk",         editorPlus, duplicateController.bulkAction);
+router.get("/:id",           editorPlus, duplicateController.getById);
 router.delete("/:id",        adminOnly,  duplicateController.deleteDuplicate);
 router.put("/:id/merge",     editorPlus, duplicateController.merge);
 router.put("/:id/skip",      editorPlus, duplicateController.skip);

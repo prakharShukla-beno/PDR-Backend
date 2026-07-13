@@ -21,7 +21,7 @@ const importJobSchema = new mongoose.Schema(
       type: String,
       enum: [
         "pending",
-        "parsing",
+        "importing",
         "processing",
         "completed",
         "completed_with_errors",
@@ -36,6 +36,10 @@ const importJobSchema = new mongoose.Schema(
       default: false,
     },
     totalRows: {
+      type: Number,
+      default: 0,
+    },
+    importedCount: {
       type: Number,
       default: 0,
     },

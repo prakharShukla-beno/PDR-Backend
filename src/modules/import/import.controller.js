@@ -1,68 +1,9 @@
 import importService from "./import.service.js";
 import ImportJob from "./importJob.model.js";
-import StagedRow from "./stagedRow.model.js";
-import { parseExcelFile, detectMissingIcpColumns } from "../../common/utils/excelParser.js";
-import { processImportJob, cancelImportJobIfRequested, parseExcelFileWithCancel } from "./importJob.processor.js";
+import { startImportWorker } from "./importJob.processor.js";
 import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
-const STAGE_BATCH = 2000;
-const ACTIVE_STATUSES = ["pending", "parsing", "processing"];
-
-const runAsyncImport = async (jobId, fileBuffer, companyId, userId) => {
-  try {
-    await ImportJob.findByIdAndUpdate(jobId, {
-      status: "parsing",
-      startedAt: new Date(),
-    });
-
-    if (await cancelImportJobIfRequested(jobId)) return;
-
-    const parsed = await parseExcelFileWithCancel(jobId, fileBuffer, parseExcelFile);
-    if (!parsed) return;
-
-    const { rows, headers } = parsed;
-    const missingColumns = detectMissingIcpColumns(headers);
-
-    if (await cancelImportJobIfRequested(jobId)) return;
-
-    await ImportJob.findByIdAndUpdate(jobId, {
-      totalRows: rows.length,
-      missingIcpColumns: missingColumns,
-    });
-
-    const stagedDocs = rows.map((row, index) => ({
-      jobId,
-      rowIndex: index,
-      rawData: row,
-      processed: false,
-    }));
-
-    for (let i = 0; i < stagedDocs.length; i += STAGE_BATCH) {
-      if (await cancelImportJobIfRequested(jobId)) return;
-
-      await StagedRow.insertMany(
-        stagedDocs.slice(i, i + STAGE_BATCH),
-        { ordered: false }
-      );
-    }
-
-    if (await cancelImportJobIfRequested(jobId)) return;
-
-    await ImportJob.findByIdAndUpdate(jobId, { status: "processing" });
-    await processImportJob(jobId, companyId, userId);
-  } catch (err) {
-    const existing = await ImportJob.findById(jobId).select("status").lean();
-    if (existing?.status === "cancelled") return;
-
-    console.error(`Import job ${jobId} failed:`, err);
-    await StagedRow.deleteMany({ jobId });
-    await ImportJob.findByIdAndUpdate(jobId, {
-      status: "failed",
-      errorMessage: err.message,
-      completedAt: new Date(),
-    });
-  }
-};
+const ACTIVE_STATUSES = ["pending", "importing", "processing"];
 
 const importController = {
 
@@ -137,7 +78,7 @@ const importController = {
       if (!req.file) {
         return res.status(400).json({
           success: false,
-          message: "No file uploaded. Please upload an Excel file.",
+          message: "No file uploaded",
         });
       }
 
@@ -155,20 +96,25 @@ const importController = {
         status: "pending",
       });
 
-      const fileBuffer = Buffer.from(req.file.buffer);
-
       res.status(202).json({
         success: true,
-        message: "Import queued for processing",
-        data: {
-          jobId: job._id,
-          status: job.status,
-        },
+        message: "Import started",
+        data: { jobId: job._id, status: "pending" },
       });
 
-      setImmediate(() => {
-        runAsyncImport(job._id, fileBuffer, companyId, userId);
-      });
+      const filePath = req.file.path;
+
+      setTimeout(() => {
+        startImportWorker(job._id.toString(), filePath, companyId).catch(
+          (err) => {
+            console.error("Import worker crashed:", err.message);
+            ImportJob.findByIdAndUpdate(job._id, {
+              status: "failed",
+              errorMessage: err.message,
+            }).catch(() => {});
+          }
+        );
+      }, 100);
     } catch (error) {
       next(error);
     }
@@ -252,8 +198,6 @@ const importController = {
           message: "This import has already finished and can't be cancelled",
         });
       }
-
-      await StagedRow.deleteMany({ jobId: job._id, processed: false });
 
       console.log(`Import job ${job._id} cancelled via API`);
 

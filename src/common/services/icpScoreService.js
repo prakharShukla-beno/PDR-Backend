@@ -6,6 +6,13 @@ import { buildIcpScoreUpdate, resolveTechFitScore } from "../utils/icpScoreHelpe
 
 const BATCH_SIZE = 200;
 
+/** Active benchmark ICP for a company (first active profile). */
+export const getBenchmarkIcp = async (companyId) => {
+  return await ICP.findOne({ companyId, isActive: true })
+    .sort({ createdAt: 1 })
+    .lean();
+};
+
 /** Sum nested { score } values from an icpScoring pillar breakdown object */
 const pillarScore = (pillarBreakdown) => {
   if (!pillarBreakdown || typeof pillarBreakdown !== "object") return null;
