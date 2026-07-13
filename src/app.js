@@ -40,15 +40,23 @@ const allowedOrigins = [
   process.env.FRONTEND_URL?.replace(/\/+$/, ""),
 ].filter(Boolean);
 
+// Vercel preview deployments for this project, e.g.:
+// https://pdr-frontend-git-feature-x-username.vercel.app
+// https://pdr-frontend-abc123-team.vercel.app
+const isVercelPreview = (origin) =>
+  /^https:\/\/pdr-frontend[a-z0-9-]*\.vercel\.app$/i.test(origin);
+
 app.use(helmet());
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
+      if (!origin) return callback(null, true); // server-to-server, curl, etc.
+
+      if (allowedOrigins.includes(origin) || isVercelPreview(origin)) {
+        return callback(null, true);
       }
+
+      callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
   })
