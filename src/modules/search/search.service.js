@@ -1,5 +1,20 @@
 import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
+import Segment from "../segment/segment.model.js";
+import Campaign from "../campaign/campaign.model.js";
+import { buildPrimaryIndustryFilter } from "../../common/utils/industryMapper.js";
+import { companyFilter, companyUserIds } from "../../common/utils/tenantScope.js";
+import { resolveContactAccountLinks } from "../../common/utils/resolveContactAccountLinks.js";
+
+const RESULT_LIMIT_PER_TYPE = 5;
+
+const escapeRegex = (value) =>
+  value.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const contactDisplayName = (contact) => {
+  const full = [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim();
+  return full || contact.email || "Unnamed contact";
+};
 
 // ─── Helper: Build Include/Exclude filter ──────────────────────────────────
 // inc = ["Healthcare", "SaaS"]  → $in
@@ -22,13 +37,91 @@ const toArray = (val) => {
   return Array.isArray(val) ? val.filter(Boolean) : [val].filter(Boolean);
 };
 
+const intersectProspectIds = (existingIdFilter, allowedIds) => {
+  const allowed = new Set(toArray(allowedIds).map(String));
+  if (!allowed.size) return existingIdFilter || null;
+  if (existingIdFilter?.$in) {
+    const intersected = existingIdFilter.$in
+      .map((id) => id.toString())
+      .filter((id) => allowed.has(id));
+    return { $in: intersected };
+  }
+  return { $in: [...allowed] };
+};
+
+const REGION_COUNTRIES = {
+  "North America (NA)":   ["United States", "Canada", "Mexico"],
+  "Europe":               ["United Kingdom", "Germany", "France", "Netherlands", "Sweden", "Norway", "Denmark", "Finland", "Switzerland", "Austria", "Belgium", "Spain", "Italy", "Portugal", "Ireland", "Poland"],
+  "Asia-Pacific (APAC)":  ["China", "Japan", "South Korea", "Australia", "New Zealand", "Hong Kong", "Taiwan"],
+  "South Asia":           ["India", "Pakistan", "Bangladesh", "Sri Lanka", "Nepal", "Bhutan", "Maldives"],
+  "Southeast Asia":       ["Singapore", "Indonesia", "Malaysia", "Thailand", "Vietnam", "Philippines", "Myanmar", "Cambodia"],
+  "Middle East":          ["Turkey", "Israel", "Jordan", "Lebanon", "Iraq", "Iran", "Yemen", "Oman", "Kuwait", "Bahrain", "Qatar"],
+  "GCC":                  ["Saudi Arabia", "United Arab Emirates", "Qatar", "Kuwait", "Bahrain", "Oman"],
+  "Latin America (LATAM)":["Brazil", "Mexico", "Argentina", "Colombia", "Chile", "Peru", "Venezuela", "Ecuador"],
+  "Africa":               ["South Africa", "Nigeria", "Kenya", "Egypt", "Ghana", "Ethiopia", "Morocco", "Tunisia"],
+};
+
+const expandRegions = (regionNames = []) => {
+  const countries = [];
+  for (const region of regionNames) {
+    countries.push(...(REGION_COUNTRIES[region] || []));
+  }
+  return [...new Set(countries)];
+};
+
+const applyTechStackInclude = (filter, tools) => {
+  const list = toArray(tools);
+  if (!list.length) return;
+  filter.$and = filter.$and || [];
+  filter.$and.push({
+    $or: list.flatMap((tool) => [
+      { primaryTechStack: tool },
+      { secondaryTechStack: tool },
+      { tertiaryTechStack: tool },
+    ]),
+  });
+};
+
+const applyTechStackExclude = (filter, tools) => {
+  const list = toArray(tools);
+  if (!list.length) return;
+  filter.$and = filter.$and || [];
+  filter.$and.push({
+    $nor: list.map((tool) => ({
+      $or: [
+        { primaryTechStack: tool },
+        { secondaryTechStack: tool },
+        { tertiaryTechStack: tool },
+      ],
+    })),
+  });
+};
+
+const SCORE_BAND_CLAUSES = {
+  ">60":     (field) => ({ [field]: { $gt: 60 } }),
+  "30 - 59": (field) => ({ [field]: { $gte: 30, $lte: 59 } }),
+  "<30":     (field) => ({ [field]: { $lt: 30 } }),
+};
+
+const applyScoreBandFilter = (filter, field, bands) => {
+  const list = toArray(bands);
+  if (!list.length) return;
+  const clauses = list
+    .map((band) => SCORE_BAND_CLAUSES[band]?.(field))
+    .filter(Boolean);
+  if (!clauses.length) return;
+  filter.$and = filter.$and || [];
+  if (clauses.length === 1) filter.$and.push(clauses[0]);
+  else filter.$and.push({ $or: clauses });
+};
+
 const searchService = {
 
   // ===========================================================================
   // ACCOUNT SEARCH — Prospect Collection
   // Include/Exclude filters + various fields + pagination
   // ===========================================================================
-  searchProspects: async (query) => {
+  searchProspects: async (companyId, query) => {
     const {
       // Free text
       search,
@@ -41,6 +134,9 @@ const searchService = {
       employeesInclude,     employeesExclude,
       revenueInclude,       revenueExclude,
       salesPriorityInclude, salesPriorityExclude,
+      icpTierInclude,         icpTierExclude,
+      icpSalesPriorityInclude, icpSalesPriorityExclude,
+      icpScoreBandInclude,    techFitScoreBandInclude,
       clvRankingInclude,    clvRankingExclude,
       intentSignalInclude,  intentSignalExclude,
       historyTriggerInclude,historyTriggerExclude,
@@ -53,11 +149,23 @@ const searchService = {
       commercialCategoryInclude, commercialCategoryExclude,
       sourceInclude,        sourceExclude,
 
+      // Segment builder filters
+      regionsInclude,       regionsExclude,
+      techStackInclude,     techStackExclude,
+      techFitScores,
+      finalScoreMin,        finalScoreMax,
+      enriched,
+      designationInclude,
+      seniorityInclude,
+
       // Range filter
       techFitScoreMin, techFitScoreMax,
 
       // Boolean filters
       isDuplicate,
+
+      // Scope to specific prospect IDs (e.g. segment snapshot)
+      ids,
 
       // Pagination + sort
       page      = 1,
@@ -66,7 +174,7 @@ const searchService = {
       sortOrder = "desc",
     } = query;
 
-    const filter = {};
+    const filter = companyFilter(companyId, {});
 
     // ── Free text search ─────────────────────────────────────────────────────
     if (search) {
@@ -84,13 +192,42 @@ const searchService = {
       if (f) filter[field] = f;
     };
 
-    applyFilter("primaryIndustry",     industryInclude,          industryExclude);
-    applyFilter("country",             countryInclude,           countryExclude);
+    const industryClause = buildPrimaryIndustryFilter(industryInclude, industryExclude);
+    if (industryClause) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(industryClause);
+    }
+
+    // ── Region → country expansion ───────────────────────────────────────────
+    const regionCountries = expandRegions(toArray(regionsInclude));
+    const regionExcluded  = expandRegions(toArray(regionsExclude));
+    let effectiveCountryInclude = toArray(countryInclude);
+    let effectiveCountryExclude = toArray(countryExclude);
+    if (regionCountries.length) {
+      effectiveCountryInclude = [...new Set([...effectiveCountryInclude, ...regionCountries])];
+    }
+    if (regionExcluded.length) {
+      effectiveCountryExclude = [...new Set([...effectiveCountryExclude, ...regionExcluded])];
+    }
+    if (effectiveCountryInclude.length || effectiveCountryExclude.length) {
+      const countryFilter = buildIncExcFilter(effectiveCountryInclude, effectiveCountryExclude);
+      if (countryFilter) filter.country = countryFilter;
+    } else {
+      applyFilter("country", countryInclude, countryExclude);
+    }
+
     applyFilter("hqLocationCity",      cityInclude,              cityExclude);
     applyFilter("businessModel",       businessModelInclude,     businessModelExclude);
     applyFilter("noOfEmployees",       employeesInclude,         employeesExclude);
     applyFilter("annualRevenue",       revenueInclude,           revenueExclude);
-    applyFilter("salesPriority",       salesPriorityInclude,     salesPriorityExclude);
+    applyFilter("icpTier",             icpTierInclude,           icpTierExclude);
+    const priorityInc = toArray(icpSalesPriorityInclude).length
+      ? icpSalesPriorityInclude
+      : salesPriorityInclude;
+    const priorityExc = toArray(icpSalesPriorityExclude).length
+      ? icpSalesPriorityExclude
+      : salesPriorityExclude;
+    applyFilter("icpSalesPriority",    priorityInc,              priorityExc);
     applyFilter("clvRanking",          clvRankingInclude,        clvRankingExclude);
     applyFilter("intentSignal",        intentSignalInclude,      intentSignalExclude);
     applyFilter("historyTrigger",      historyTriggerInclude,    historyTriggerExclude);
@@ -103,16 +240,75 @@ const searchService = {
     applyFilter("commercialCategory",  commercialCategoryInclude,commercialCategoryExclude);
     applyFilter("source",              sourceInclude,            sourceExclude);
 
-    // ── TechFit Score range ──────────────────────────────────────────────────
-    if (techFitScoreMin || techFitScoreMax) {
-      filter.techFitScore = {};
-      if (techFitScoreMin) filter.techFitScore.$gte = Number(techFitScoreMin);
-      if (techFitScoreMax) filter.techFitScore.$lte = Number(techFitScoreMax);
+    applyTechStackInclude(filter, techStackInclude);
+    applyTechStackExclude(filter, techStackExclude);
+
+    applyScoreBandFilter(filter, "icpFinalScore", icpScoreBandInclude);
+    applyScoreBandFilter(filter, "techFitScoreIcp", techFitScoreBandInclude);
+
+    const techFitList = toArray(techFitScores).map(Number).filter((n) => !Number.isNaN(n));
+    if (techFitList.length) {
+      filter.techFitScore = techFitList.length === 1 ? techFitList[0] : { $in: techFitList };
+    }
+
+    if (finalScoreMin || finalScoreMax) {
+      filter.finalScore = {};
+      if (finalScoreMin) filter.finalScore.$gte = Number(finalScoreMin);
+      if (finalScoreMax) filter.finalScore.$lte = Number(finalScoreMax);
+    }
+
+    if (enriched === "true")  filter.financialCapacity = { $ne: null };
+    if (enriched === "false") filter.financialCapacity = null;
+
+    // ── Buyer persona — designation / seniority via linked contacts ──────────
+    const designations = toArray(designationInclude);
+    const seniorities  = toArray(seniorityInclude);
+    if (designations.length || seniorities.length) {
+      const contactFilter = companyFilter(companyId, {});
+      const clauses = [];
+      if (designations.length) {
+        clauses.push({
+          $or: designations.map((d) => ({
+            standardizedRoles: { $regex: escapeRegex(d), $options: "i" },
+          })),
+        });
+      }
+      if (seniorities.length) {
+        clauses.push({
+          seniority: seniorities.length === 1
+            ? seniorities[0]
+            : { $in: seniorities },
+        });
+      }
+      if (clauses.length === 1) Object.assign(contactFilter, clauses[0]);
+      else contactFilter.$and = clauses;
+      const matchedContacts = await Contact.find(contactFilter).select("accountId").lean();
+      const accountIds = [...new Set(
+        matchedContacts.map((c) => c.accountId?.toString()).filter(Boolean)
+      )];
+      filter._id = accountIds.length ? { $in: accountIds } : { $in: [] };
+    }
+
+    // ── TechFit Score range (legacy slider / segment builder) ────────────────
+    if (
+      !toArray(techFitScoreBandInclude).length &&
+      (techFitScoreMin || techFitScoreMax)
+    ) {
+      filter.techFitScoreIcp = filter.techFitScoreIcp || {};
+      if (techFitScoreMin) filter.techFitScoreIcp.$gte = Number(techFitScoreMin);
+      if (techFitScoreMax) filter.techFitScoreIcp.$lte = Number(techFitScoreMax);
     }
 
     // ── Boolean ──────────────────────────────────────────────────────────────
     if (isDuplicate !== undefined) {
       filter.isDuplicate = isDuplicate === "true";
+    }
+
+    // ── Restrict to a fixed set of prospect IDs ───────────────────────────────
+    const scopedIds = toArray(ids);
+    if (scopedIds.length) {
+      const idClause = intersectProspectIds(filter._id, scopedIds);
+      if (idClause) filter._id = idClause;
     }
 
     // ── Pagination + sort ────────────────────────────────────────────────────
@@ -144,7 +340,7 @@ const searchService = {
   // Apollo style — contact fields plus denormalized account fields
   // Supports include/exclude filters
   // ===========================================================================
-  searchContacts: async (query) => {
+  searchContacts: async (companyId, query) => {
     const {
       // Free text
       search,
@@ -182,7 +378,7 @@ const searchService = {
       sortOrder = "desc",
     } = query;
 
-    const filter = {};
+    const filter = companyFilter(companyId, {});
 
     // ── Free text search ─────────────────────────────────────────────────────
     if (search) {
@@ -208,7 +404,15 @@ const searchService = {
     applyFilter("city",             cityInclude,             cityExclude);
 
     // ── Account level filters (denormalized) ─────────────────────────────────
-    applyFilter("accountIndustry",      accountIndustryInclude,      accountIndustryExclude);
+    const accountIndustryClause = buildPrimaryIndustryFilter(
+      accountIndustryInclude,
+      accountIndustryExclude,
+      "accountIndustry"
+    );
+    if (accountIndustryClause) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(accountIndustryClause);
+    }
     applyFilter("accountCountry",       accountCountryInclude,       accountCountryExclude);
     applyFilter("accountCity",          accountCityInclude,          accountCityExclude);
     applyFilter("accountEmployees",     accountEmployeesInclude,     accountEmployeesExclude);
@@ -245,8 +449,10 @@ const searchService = {
       Contact.countDocuments(filter),
     ]);
 
+    const resolvedContacts = await resolveContactAccountLinks(contacts, companyId);
+
     return {
-      contacts,
+      contacts: resolvedContacts,
       pagination: {
         total,
         page:       Number(page),
@@ -260,7 +466,9 @@ const searchService = {
   // FILTER OPTIONS — for frontend dropdowns
   // Unique values from both collections
   // ===========================================================================
-  getFilterOptions: async () => {
+  getFilterOptions: async (companyId) => {
+    const prospectScope = companyFilter(companyId, {});
+    const contactScope = companyFilter(companyId, {});
     const [
       // Account filters
       industries, countries, cities, businessModels,
@@ -273,25 +481,25 @@ const searchService = {
       // Contact filters
       functionalDomains, contactCountries,
     ] = await Promise.all([
-      Prospect.distinct("primaryIndustry"),
-      Prospect.distinct("country"),
-      Prospect.distinct("hqLocationCity"),
-      Prospect.distinct("businessModel"),
-      Prospect.distinct("salesPriority"),
-      Prospect.distinct("clvRanking"),
-      Prospect.distinct("intentSignal"),
-      Prospect.distinct("noOfEmployees"),
-      Prospect.distinct("annualRevenue"),
-      Prospect.distinct("historyTrigger"),
-      Prospect.distinct("servicePitch"),
-      Prospect.distinct("strategicValue"),
-      Prospect.distinct("financialCapacity"),
-      Prospect.distinct("techAdoptionProfile"),
-      Prospect.distinct("infrastructureRisk"),
-      Prospect.distinct("accountSource"),
-      Prospect.distinct("commercialCategory"),
-      Contact.distinct("functionalDomain"),
-      Contact.distinct("country"),
+      Prospect.distinct("primaryIndustry", prospectScope),
+      Prospect.distinct("country", prospectScope),
+      Prospect.distinct("hqLocationCity", prospectScope),
+      Prospect.distinct("businessModel", prospectScope),
+      Prospect.distinct("salesPriority", prospectScope),
+      Prospect.distinct("clvRanking", prospectScope),
+      Prospect.distinct("intentSignal", prospectScope),
+      Prospect.distinct("noOfEmployees", prospectScope),
+      Prospect.distinct("annualRevenue", prospectScope),
+      Prospect.distinct("historyTrigger", prospectScope),
+      Prospect.distinct("servicePitch", prospectScope),
+      Prospect.distinct("strategicValue", prospectScope),
+      Prospect.distinct("financialCapacity", prospectScope),
+      Prospect.distinct("techAdoptionProfile", prospectScope),
+      Prospect.distinct("infrastructureRisk", prospectScope),
+      Prospect.distinct("accountSource", prospectScope),
+      Prospect.distinct("commercialCategory", prospectScope),
+      Contact.distinct("functionalDomain", contactScope),
+      Contact.distinct("country", contactScope),
     ]);
 
     const clean = (arr) => arr.filter(Boolean).sort();
@@ -302,8 +510,10 @@ const searchService = {
       countries:           clean(countries),
       cities:              clean(cities),
       businessModels:      clean(businessModels),
-      salesPriorities:     clean(salesPriorities),
-      clvRankings:         clean(clvRankings),
+      salesPriorities:     ["P1", "P2", "P3", "P4"],
+      icpTiers:            ["Tier A", "Tier B", "Tier C"],
+      scoreBands:          [">60", "30 - 59", "<30"],
+      clvRankings:         ["Tier-A (Strategic)", "Tier-B (Core)", "Tier-C (Mass)"],
       intentSignals:       clean(intentSignals),
       employeeBands:       clean(employeeBands),
       revenueBands:        clean(revenueBands),
@@ -319,6 +529,85 @@ const searchService = {
       // Contact
       functionalDomains:   clean(functionalDomains),
       contactCountries:    clean(contactCountries),
+    };
+  },
+
+  globalSearch: async (companyId, query) => {
+    if (!query || query.trim().length < 2) {
+      return { accounts: [], segments: [], campaigns: [], contacts: [] };
+    }
+
+    const regex = new RegExp(escapeRegex(query), "i");
+    const campaignCreators = await companyUserIds(companyId);
+
+    const [accounts, segments, campaigns, contacts] = await Promise.all([
+      Prospect.find(
+        companyFilter(companyId, {
+          $or: [{ accountName: regex }, { website: regex }],
+        })
+      )
+        .select("accountName website primaryIndustry clvRanking")
+        .limit(RESULT_LIMIT_PER_TYPE)
+        .lean(),
+
+      Segment.find(companyFilter(companyId, { name: regex }))
+        .select("name matchCount matchedAccountIds")
+        .limit(RESULT_LIMIT_PER_TYPE)
+        .lean(),
+
+      Campaign.find({
+        createdBy: { $in: campaignCreators },
+        name: regex,
+      })
+        .select("name status")
+        .limit(RESULT_LIMIT_PER_TYPE)
+        .lean(),
+
+      Contact.find(
+        companyFilter(companyId, {
+          $or: [
+            { firstName: regex },
+            { lastName: regex },
+            { email: regex },
+            { accountName: regex },
+            { standardizedRoles: regex },
+          ],
+        })
+      )
+        .select("firstName lastName email standardizedRoles accountName accountId")
+        .limit(RESULT_LIMIT_PER_TYPE)
+        .lean(),
+    ]);
+
+    return {
+      accounts: accounts.map((a) => ({
+        id: a._id,
+        type: "account",
+        title: a.accountName,
+        subtitle: a.website || a.primaryIndustry || "",
+        badge: a.clvRanking || null,
+      })),
+      segments: segments.map((s) => ({
+        id: s._id,
+        type: "segment",
+        title: s.name,
+        subtitle: `${s.matchCount ?? s.matchedAccountIds?.length ?? 0} accounts`,
+      })),
+      campaigns: campaigns.map((c) => ({
+        id: c._id,
+        type: "campaign",
+        title: c.name,
+        subtitle: c.status || "",
+      })),
+      contacts: contacts.map((c) => ({
+        id: c._id,
+        type: "contact",
+        title: contactDisplayName(c),
+        subtitle: c.standardizedRoles
+          ? `${c.standardizedRoles} at ${c.accountName || "Unknown"}`
+          : c.accountName || c.email || "",
+        accountId: c.accountId ? String(c.accountId) : null,
+      })),
     };
   },
 };

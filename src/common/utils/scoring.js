@@ -22,85 +22,82 @@
 //   With AI    → Gemini fills missing fields → enrichment calls calculateScore()
 // ─────────────────────────────────────────────────────────────────────────────
 
+import {
+  ALIGNMENT_TO_SCORE,
+  getTechFitMultiplier as getTechFitMultiplierFromScore,
+} from "./icpScoreHelpers.js";
 
-// ── STEP 1: Tech Fit Multiplier ───────────────────────────────────────────────
-// This is the GATEKEEPER — if 0, final score = 0 (account disqualified)
-//
-// Priority order:
-//   1. technologyAlignment  (direct: "Core Match" / "Adjacent Match" / "No Match")
-//   2. techFitScore         (manual 0-100 entry)
-//   3. techAdoptionProfile  (maturity proxy — fallback only)
-//
-// FIX: technologyAlignment is the correct field per requirement
-// techAdoptionProfile is only a fallback
-const getTechFitMultiplier = (prospect, icpTechInclude = [], icpTechExclude = []) => {
 
+// ── STEP 1: Tech Fit Score (0-100) ────────────────────────────────────────────
+
+const getTechFitScore = (prospect, icpTechInclude = [], icpTechExclude = []) => {
   const prospectStack = prospect.primaryTechStack || [];
 
-  // ── ICP-based Tech Fit (highest priority) ────────────────────────────────
-  // If ICP has tech lists defined, compare prospect stack against them
   if (icpTechInclude.length > 0 || icpTechExclude.length > 0) {
-
-    // Disqualify if prospect uses any excluded tool
     const usesExcluded = icpTechExclude.some(t => prospectStack.includes(t));
-    if (usesExcluded) {
-      const matched = icpTechExclude.filter(t => prospectStack.includes(t));
-      return { multiplier: 0.0, label: `No Match — uses excluded tools: ${matched.join(", ")}` };
-    }
+    if (usesExcluded) return 20;
 
     if (icpTechInclude.length > 0) {
       const matchedTools = icpTechInclude.filter(t => prospectStack.includes(t));
       const matchRatio   = matchedTools.length / icpTechInclude.length;
-
-      // Core Match: uses 50%+ of required tools
-      if (matchRatio >= 0.5)
-        return { multiplier: 1.0, label: `Core Match — ${matchedTools.length}/${icpTechInclude.length} tools matched: ${matchedTools.join(", ")}` };
-
-      // Adjacent Match: uses at least 1 required tool
-      if (matchedTools.length > 0)
-        return { multiplier: 0.5, label: `Adjacent Match — ${matchedTools.length}/${icpTechInclude.length} tools matched: ${matchedTools.join(", ")}` };
-
-      // No tools matched — but not excluded either → Adjacent by default
-      return { multiplier: 0.5, label: "Adjacent Match — no included tools found, but not disqualified" };
+      if (matchRatio >= 0.5) return 95;
+      if (matchedTools.length > 0) return 82;
+      return 20;
     }
 
-    // Only exclusions defined, none matched — keep prospect
-    return { multiplier: 1.0, label: "Core Match — passes exclusion check" };
+    return 95;
   }
 
-  // ── Fallback: use technologyAlignment field (manual entry) ───────────────
   const alignment = prospect.technologyAlignment;
-  if (alignment === "Core Match")     return { multiplier: 1.0, label: "Core Match" };
-  if (alignment === "Adjacent Match") return { multiplier: 0.5, label: "Adjacent Match" };
-  if (alignment === "No Match")       return { multiplier: 0.0, label: "No Match — Disqualified" };
-
-  // ── Fallback: manually entered techFitScore ───────────────────────────────
-  const score = prospect.techFitScore;
-  if (score !== null && score !== undefined) {
-    if (score >= 90) return { multiplier: 1.0, label: `Core Match (score: ${score})` };
-    if (score >= 50) return { multiplier: 0.5, label: `Adjacent Match (score: ${score})` };
-    return            { multiplier: 0.0, label: `No Match (score: ${score}) — Disqualified` };
+  if (alignment && ALIGNMENT_TO_SCORE[alignment] !== undefined) {
+    return ALIGNMENT_TO_SCORE[alignment];
   }
 
-  // ── Fallback: tech adoption profile ──────────────────────────────────────
   const adoptionProfile = prospect.techAdoptionProfile;
-  if (!adoptionProfile) return { multiplier: 0.5, label: "Not assessed — Adjacent by default" };
-  if (["Innovator", "Early Adopter"].includes(adoptionProfile))
-    return { multiplier: 1.0, label: `Core Match (profile: ${adoptionProfile})` };
-  if (adoptionProfile === "Mainstream")
-    return { multiplier: 0.5, label: `Adjacent Match (profile: ${adoptionProfile})` };
-  return { multiplier: 0.0, label: `No Match (profile: ${adoptionProfile}) — Disqualified` };
+  if (adoptionProfile === "Innovator" || adoptionProfile === "Early Adopter") return 95;
+  if (adoptionProfile === "Mainstream") return 82;
+  if (adoptionProfile === "Laggard" || adoptionProfile === "Leapfrog") return 20;
+
+  const score = prospect.techFitScore;
+  if (score !== null && score !== undefined) return score;
+
+  return null;
+};
+
+// ── STEP 1b: Tech Fit Multiplier (4-band system) ───────────────────────────────
+
+const getTechFitMultiplier = (prospect, icpTechInclude = [], icpTechExclude = []) => {
+  const score = getTechFitScore(prospect, icpTechInclude, icpTechExclude);
+  const { multiplier, band } = getTechFitMultiplierFromScore(score);
+
+  let label = band;
+  if (band === "Unknown") {
+    label = "Not assessed — no penalty until enriched";
+  } else if (score !== null && score !== undefined) {
+    label = `${band} (score: ${score})`;
+  }
+
+  return {
+    multiplier,
+    techFitScore: score,
+    techFitBand:  band,
+    label,
+  };
 };
 
 
 // ── STEP 2: Financial Points ──────────────────────────────────────────────────
 // Source: Requirement "Financial Capacity (The Baseline)"
 //
-// Enterprise  > $200M      → 50 pts
-// Mid-Market  $50M-$200M   → 25 pts
-// Small Biz   < $50M       → 10 pts
+// Enterprise  $500M+         → 50 pts
+// Mid-Market  $50M-$500M     → 25 pts
+// Small Biz   <$50M          → 10 pts
 //
 // FIX: "$10M-$50M" was wrongly Mid-Market — now correctly Small Business
+// UPDATED: revenue bucket labels changed to the new 7-bucket scheme
+//   ("Scale-Up $10M-$50M" → "Growth $10M-$50M", "Mid-Market $50M-$250M" /
+//    "Corporate $250M-$1B" → split into "Scale $50M-$100M" / "Mid-Market $100M-$500M" /
+//    "Enterprise $500M-$1B", "Enterprise $1B+" → "Mega $1B+")
 const getFinancialPoints = (prospect) => {
   const capacity = prospect.financialCapacity;
   const revenue  = prospect.annualRevenue;
@@ -111,11 +108,11 @@ const getFinancialPoints = (prospect) => {
 
   if (!revenue) return { points: 10, label: "Unknown — Small Business default (10 pts)" };
 
-  if (revenue.includes("$1B") || revenue.includes("$250M-$1B"))
-    return { points: 50, label: "Enterprise >$200M (50 pts)" };
+  if (revenue.includes("$1B+") || revenue.includes("$500M-$1B"))
+    return { points: 50, label: "Enterprise $500M+ (50 pts)" };
 
-  if (revenue.includes("$50M-$250M"))
-    return { points: 25, label: "Mid-Market $50M-$200M (25 pts)" };
+  if (revenue.includes("$50M-$100M") || revenue.includes("$100M-$500M"))
+    return { points: 25, label: "Mid-Market $50M-$500M (25 pts)" };
 
   // FIX: "$10M-$50M" is Small Business, not Mid-Market
   if (
@@ -123,7 +120,8 @@ const getFinancialPoints = (prospect) => {
     revenue.includes("$1M-$10M")  ||
     revenue.includes("<$1M")       ||
     revenue.includes("Seed")       ||
-    revenue.includes("Early")
+    revenue.includes("Early")      ||
+    revenue.includes("Growth")
   ) return { points: 10, label: "Small Business <$50M (10 pts)" };
 
   return { points: 10, label: "Small Business default (10 pts)" };
@@ -214,6 +212,11 @@ export const calculateScore = (prospect, icpProfile = null) => {
   // STEP 1 — Tech Fit (gatekeeper)
   const techFit = getTechFitMultiplier(prospect, icpTechInclude, icpTechExclude);
 
+  const techFitScoreForLog = techFit.techFitScore ?? "null";
+  console.log(`TechFit for ${prospect.accountName || prospect._id}:
+  technologyAlignment=${prospect.technologyAlignment}
+  → multiplier=${techFit.multiplier}, techFitScore=${techFitScoreForLog}, band=${techFit.techFitBand}`);
+
   if (techFit.multiplier === 0) {
     return {
       finalScore:    0,
@@ -251,10 +254,11 @@ export const calculateScore = (prospect, icpProfile = null) => {
   // STEP 7 — Priority
   const salesPriority = getPriorityFromTierAndIntent(clvRanking, prospect.intentSignal);
 
-  // Convert multiplier → 0-100 for techFitScore field in DB
-  const techFitScore =
-    techFit.multiplier === 1.0 ? 90 :
-    techFit.multiplier === 0.5 ? 60 : 0;
+  const techFitScore = techFit.techFitScore ?? (
+    techFit.multiplier === 1.0 ? 95 :
+    techFit.multiplier === 0.8 ? 82 :
+    techFit.multiplier === 0.5 ? 55 : 0
+  );
 
   return {
     finalScore,

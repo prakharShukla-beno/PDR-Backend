@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { normalizeIndustryValue, getSectorForIndustry } from "../../common/utils/industryMapper.js";
 
 const prospectSchema = new mongoose.Schema(
   {
@@ -21,11 +22,6 @@ const prospectSchema = new mongoose.Schema(
     },
     primaryIndustry: {
       type: String,
-      enum: [
-        "BFSI", "IT & ITES", "SaaS", "Fintech", "E-commerce",
-        "Healthcare", "EdTech", "Logistics", "Manufacturing",
-        "Retail & CPG", "Media & Telecom", "Real Estate", null,
-      ],
       default: null,
     },
     commercialCategory: {
@@ -51,14 +47,28 @@ const prospectSchema = new mongoose.Schema(
     annualRevenue: {
       type: String,
       enum: [
-        "Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M",
-        "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+", null,
+        "Seed <$1M",
+        "Early $1M-$10M",
+        "Scale-Up $10M-$50M",
+        "Mid-Market $50M-$250M",
+        "Corporate $250M-$1B",
+        "Enterprise $1B+",
+        // Legacy aliases (existing DB / import data)
+        "Growth $10M-$50M",
+        "Scale $50M-$100M",
+        "Mid-Market $100M-$500M",
+        "Enterprise $500M-$1B",
+        "Mega $1B+",
+        null,
       ],
       default: null,
     },
     noOfEmployees: {
       type: String,
-      enum: ["1-50", "51-200", "201-1,000", "1,001-5,000", "5,000+", null],
+      enum: [
+        "1-10", "11-50", "51-200", "201-500", "501-1,000",
+        "1,001-5,000", "5,001-10,000", "10,000+", null,
+      ],
       default: null,
     },
 
@@ -157,6 +167,66 @@ const prospectSchema = new mongoose.Schema(
       default: null,
     },
 
+    // ── ICP Match Score (against the ICP this account was last matched with) ──
+    icpMatchScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
+    icpScoreBreakdown: {
+      firmographic: { type: Number, default: null },
+      market:       { type: Number, default: null },
+      tech:         { type: Number, default: null },
+      persona:      { type: Number, default: null },
+    },
+    icpTier: {
+      type: String,
+      enum: ["Tier A", "Tier B", "Tier C", null],
+      default: null,
+    },
+    icpSalesPriority: {
+      type: String,
+      enum: ["P1", "P2", "P3", "P4", null],
+      default: null,
+    },
+    icpBenchmarkRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ICP",
+      default: null,
+    },
+    icpScoredAt: {
+      type: Date,
+      default: null,
+    },
+    icpScoreStale: {
+      type: Boolean,
+      default: false,
+    },
+    techFitScoreIcp: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
+    techFitBand: {
+      type: String,
+      enum: [
+        "Core Match",
+        "Addressable",
+        "Stretch",
+        "Incompatible",
+        null,
+      ],
+      default: null,
+    },
+    icpFinalScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
+
     // ── Relational References ────────────────────────────────────────────────
     // contacts[] array removed — contacts are stored in the separate Contact collection
     // Account detail page: GET /api/contacts?accountId=xxx
@@ -175,6 +245,11 @@ const prospectSchema = new mongoose.Schema(
     interactionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Interaction" }],
 
     // ── System ───────────────────────────────────────────────────────────────
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      default: null,
+    },
     isDuplicate: { type: Boolean, default: false },
     source: {
       type: String,
@@ -185,10 +260,19 @@ const prospectSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// ─── Pre-save: accountNameLower auto-set ──────────────────────────────────────
+// ─── Pre-save: accountNameLower auto-set + industry validation ────────────────
 prospectSchema.pre("save", function () {
   if (this.accountName) {
     this.accountNameLower = this.accountName.toLowerCase().trim();
+  }
+  
+  // FIX: Normalize industry value to preserve exact format
+  // Prevents "Fintech" or "Banking" from being converted to "BFSI"
+  if (this.primaryIndustry) {
+    const normalized = normalizeIndustryValue(this.primaryIndustry);
+    if (normalized) {
+      this.primaryIndustry = normalized;
+    }
   }
 });
 
@@ -197,9 +281,18 @@ prospectSchema.pre("insertMany", function (next, docs) {
     if (typeof next === "function") next();
     return;
   }
+  
   docs.forEach((doc) => {
     if (doc.accountName) {
       doc.accountNameLower = doc.accountName.toLowerCase().trim();
+    }
+    
+    // FIX: Normalize industry values during bulk insert
+    if (doc.primaryIndustry) {
+      const normalized = normalizeIndustryValue(doc.primaryIndustry);
+      if (normalized) {
+        doc.primaryIndustry = normalized;
+      }
     }
   });
   if (typeof next === "function") next();
@@ -207,6 +300,10 @@ prospectSchema.pre("insertMany", function (next, docs) {
 
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
+prospectSchema.index({ companyId: 1 });
+prospectSchema.index({ companyId: 1, primaryIndustry: 1 });
+prospectSchema.index({ companyId: 1, clvRanking: 1 });
+prospectSchema.index({ companyId: 1, country: 1 });
 prospectSchema.index({ accountName: "text", website: "text" });
 prospectSchema.index({ accountName: 1 });
 prospectSchema.index({ accountNameLower: 1 });   // exact match ke liye
@@ -226,6 +323,11 @@ prospectSchema.index({ finalScore: 1 });
 prospectSchema.index({ technologyAlignment: 1 });
 prospectSchema.index({ assignedTo: 1 });
 prospectSchema.index({ source: 1 });
+prospectSchema.index({ companyId: 1, icpMatchScore: 1 });
+prospectSchema.index({ companyId: 1, icpScoreStale: 1 });
+prospectSchema.index({ companyId: 1, icpTier: 1 });
+prospectSchema.index({ companyId: 1, icpSalesPriority: 1 });
+prospectSchema.index({ companyId: 1, icpFinalScore: 1 });
 
 const Prospect = mongoose.model("Prospect", prospectSchema);
 export default Prospect;

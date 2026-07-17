@@ -1,26 +1,94 @@
 import prospectRepository from "./prospect.repository.js";
+import Prospect from "./prospect.model.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
+import Contact from "../contacts/contact.model.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
+import { companyFilter } from "../../common/utils/tenantScope.js";
+import { buildPrimaryIndustryFilter } from "../../common/utils/industryMapper.js";
 import pkg from "xlsx";
 const { utils, write } = pkg;
+
+const toArray = (val) => {
+  if (val == null || val === "") return [];
+
+  if (Array.isArray(val)) {
+    return val.flatMap((item) => toArray(item)).filter(Boolean);
+  }
+
+  if (typeof val === "object") {
+    const values = Object.values(val).flatMap((item) => toArray(item)).filter(Boolean);
+    if (values.length) return values;
+  }
+
+  if (typeof val === "string") {
+    if (val.includes(",")) {
+      return val.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+    return [val].filter(Boolean);
+  }
+
+  return [val].filter(Boolean);
+};
+
+/** Map `industry` or `primaryIndustry` query param to a MongoDB primaryIndustry filter */
+const buildIndustryFilter = (industry, primaryIndustry, industries) => {
+  const fromList = toArray(industries);
+  if (fromList.length > 0) {
+    return buildPrimaryIndustryFilter(fromList, []);
+  }
+  const raw = industry ?? primaryIndustry;
+  if (!raw) return null;
+  const values = toArray(raw);
+  return buildPrimaryIndustryFilter(values, []);
+};
+
+const applyTechStackInclude = (filter, tools) => {
+  const list = toArray(tools);
+  if (!list.length) return;
+  const clause = {
+    $or: list.flatMap((tool) => [
+      { primaryTechStack: tool },
+      { secondaryTechStack: tool },
+      { tertiaryTechStack: tool },
+    ]),
+  };
+  filter.$and = filter.$and || [];
+  filter.$and.push(clause);
+};
+
+const applyTechStackExclude = (filter, tools) => {
+  const list = toArray(tools);
+  if (!list.length) return;
+  filter.$and = filter.$and || [];
+  filter.$and.push({
+    $nor: list.map((tool) => ({
+      $or: [
+        { primaryTechStack: tool },
+        { secondaryTechStack: tool },
+        { tertiaryTechStack: tool },
+      ],
+    })),
+  });
+};
 
 const prospectService = {
 
   // Create prospect with automatic duplicate detection
-  create: async (data, userId) => {
+  create: async (data, userId, companyId) => {
     const existing = await prospectRepository.findDuplicates({
       accountName: data.accountName,
       website:     data.website,
+      companyId,
     });
 
     const isDuplicate = existing.length > 0;
 
     const prospect = await prospectRepository.create({
       ...data,
+      companyId,
       isDuplicate,
       source: data.source || "excel",
     });
-
     // Log duplicate pair for review
     if (isDuplicate) {
       const matchFields = [];
@@ -39,30 +107,90 @@ const prospectService = {
   },
 
   // Get paginated prospects with filters and sorting
-  getAll: async (query) => {
+  getAll: async (companyId, query) => {
     const {
       page = 1, limit = 10, search,
-      primaryIndustry, country, salesPriority,
-      isDuplicate, clvRanking, businessModel,
+      industry, primaryIndustry, industries,
+      country, countries,
+      salesPriority, salesPriorities,
+      isDuplicate, clvRanking, clvRankings,
+      businessModel,
+      employeeRanges, annualRevenues,
+      techStackInclude, techStackExclude,
+      techFitScores,
+      finalScoreMin, finalScoreMax,
+      enriched,
+      ids,
       sortBy = "createdAt", sortOrder = "desc",
     } = query;
 
-    const filter = {};
+    const filter = companyFilter(companyId, {});
+
+    const idList = toArray(ids);
+    if (idList.length) filter._id = { $in: idList };
 
     if (search) {
       filter.$or = [
         { accountName:       { $regex: search, $options: "i" } },
         { website:           { $regex: search, $options: "i" } },
-        { country:           { $regex: search, $options: "i" } },
-        { "contacts.email":  { $regex: search, $options: "i" } },
-        { "contacts.name":   { $regex: search, $options: "i" } },
+        { primaryIndustry:   { $regex: search, $options: "i" } },
       ];
     }
 
-    if (primaryIndustry) filter.primaryIndustry = primaryIndustry;
-    if (country)         filter.country         = { $regex: country, $options: "i" };
-    if (salesPriority)   filter.salesPriority   = salesPriority;
-    if (clvRanking)      filter.clvRanking      = clvRanking;
+    const industryFilter = buildIndustryFilter(industry, primaryIndustry, industries);
+    if (industryFilter) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(industryFilter);
+    }
+
+    const countryList = toArray(countries);
+    if (countryList.length) {
+      filter.country = countryList.length === 1 ? countryList[0] : { $in: countryList };
+    } else if (country) {
+      filter.country = { $regex: country, $options: "i" };
+    }
+
+    const salesList = toArray(salesPriorities);
+    if (salesList.length) {
+      filter.salesPriority = salesList.length === 1 ? salesList[0] : { $in: salesList };
+    } else if (salesPriority) {
+      filter.salesPriority = salesPriority;
+    }
+
+    const clvList = toArray(clvRankings);
+    if (clvList.length) {
+      filter.clvRanking = clvList.length === 1 ? clvList[0] : { $in: clvList };
+    } else if (clvRanking) {
+      filter.clvRanking = clvRanking;
+    }
+
+    const employeeList = toArray(employeeRanges);
+    if (employeeList.length) {
+      filter.noOfEmployees = employeeList.length === 1 ? employeeList[0] : { $in: employeeList };
+    }
+
+    const revenueList = toArray(annualRevenues);
+    if (revenueList.length) {
+      filter.annualRevenue = revenueList.length === 1 ? revenueList[0] : { $in: revenueList };
+    }
+
+    applyTechStackInclude(filter, techStackInclude);
+    applyTechStackExclude(filter, techStackExclude);
+
+    const techFitList = toArray(techFitScores).map(Number).filter((n) => !Number.isNaN(n));
+    if (techFitList.length) {
+      filter.techFitScore = techFitList.length === 1 ? techFitList[0] : { $in: techFitList };
+    }
+
+    if (finalScoreMin || finalScoreMax) {
+      filter.finalScore = {};
+      if (finalScoreMin) filter.finalScore.$gte = Number(finalScoreMin);
+      if (finalScoreMax) filter.finalScore.$lte = Number(finalScoreMax);
+    }
+
+    if (enriched === "true")  filter.financialCapacity = { $ne: null };
+    if (enriched === "false") filter.financialCapacity = null;
+
     if (businessModel)   filter.businessModel   = businessModel;
     if (isDuplicate !== undefined) filter.isDuplicate = isDuplicate === "true";
 
@@ -82,8 +210,8 @@ const prospectService = {
   },
 
   // Get single prospect by ID
-  getById: async (id) => {
-    const prospect = await prospectRepository.findById(id);
+  getById: async (id, companyId) => {
+    const prospect = await prospectRepository.findById(id, companyId);
     if (!prospect) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
@@ -93,25 +221,24 @@ const prospectService = {
   },
 
   // Update prospect fields
-  update: async (id, data) => {
-    const exists = await prospectRepository.findById(id);
+  update: async (id, data, companyId) => {
+    const exists = await prospectRepository.findById(id, companyId);
     if (!exists) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
       throw error;
     }
-    return await prospectRepository.update(id, data);
+    return await prospectRepository.update(id, data, companyId);
   },
 
-  // Delete prospect permanently
-  delete: async (id) => {
-    const exists = await prospectRepository.findById(id);
+  delete: async (id, companyId) => {
+    const exists = await prospectRepository.findById(id, companyId);
     if (!exists) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
       throw error;
     }
-    await prospectRepository.delete(id);
+    await prospectRepository.delete(id, companyId);
     return { message: "Prospect deleted successfully" };
   },
 
@@ -129,8 +256,8 @@ const prospectService = {
   //   finalScore     → the calculated number (0-108 range)
   //   clvRanking     → Tier-A / Tier-B / Tier-C
   //   salesPriority  → P1 / P2 / P3 / P4 / null
-  calculateAndSaveScore: async (prospectId) => {
-    const prospect = await prospectRepository.findById(prospectId);
+  calculateAndSaveScore: async (prospectId, companyId) => {
+    const prospect = await prospectRepository.findById(prospectId, companyId);
     if (!prospect) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
@@ -146,16 +273,15 @@ const prospectService = {
       finalScore:    result.finalScore,
       clvRanking:    result.clvRanking,
       salesPriority: result.salesPriority,
-    });
-
+    }, companyId);
     return result;
   },
 
   // ── NEW: Get score breakdown for one prospect (read-only, no DB save) ────────
   // Used by the frontend scoring tab to show how the score was calculated
   // Returns step-by-step breakdown: formula, each component value
-  getScoreBreakdown: async (prospectId) => {
-    const prospect = await prospectRepository.findById(prospectId);
+  getScoreBreakdown: async (prospectId, companyId) => {
+    const prospect = await prospectRepository.findById(prospectId, companyId);
     if (!prospect) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
@@ -187,8 +313,8 @@ const prospectService = {
   // Sometimes a salesperson knows better than the formula
   // e.g. "This is a strategic client even though score is low"
   // overrideReason is saved so team knows why it was manually changed
-  overrideTier: async (prospectId, { clvRanking, salesPriority, overrideReason }) => {
-    const prospect = await prospectRepository.findById(prospectId);
+  overrideTier: async (prospectId, { clvRanking, salesPriority, overrideReason }, companyId) => {
+    const prospect = await prospectRepository.findById(prospectId, companyId);
     if (!prospect) {
       const error = new Error("Prospect not found");
       error.statusCode = 404;
@@ -200,19 +326,13 @@ const prospectService = {
     if (salesPriority) updateData.salesPriority = salesPriority;
     if (overrideReason) updateData.comments = `[Manual Override] ${overrideReason}`;
 
-    return await prospectRepository.update(prospectId, updateData);
+    return await prospectRepository.update(prospectId, updateData, companyId);
   },
 
-  // ── NEW: Bulk re-tier all prospects ─────────────────────────────────────────
-  // Runs calculateAndSaveScore on every prospect in the DB
-  // Used when: scoring formula changes, or "Re-Tier All" button clicked
-  // Processes one by one to avoid memory issues with large datasets
-  bulkReTier: async () => {
-    // Get all prospects without pagination limit
+  bulkReTier: async (companyId) => {
     const { prospects } = await prospectRepository.findAll({
-      filter: {}, page: 1, limit: 999999, sort: { createdAt: -1 },
+      filter: companyFilter(companyId, {}), page: 1, limit: 999999, sort: { createdAt: -1 },
     });
-
     const results = { success: 0, failed: 0, errors: [] };
 
     for (const prospect of prospects) {
@@ -223,7 +343,7 @@ const prospectService = {
           finalScore:    result.finalScore,
           clvRanking:    result.clvRanking,
           salesPriority: result.salesPriority,
-        });
+        }, companyId);
         results.success++;
       } catch (err) {
         results.failed++;
@@ -234,14 +354,151 @@ const prospectService = {
     return results;
   },
 
+  /** Backward-compat: mirror icpSalesPriority onto legacy salesPriority field */
+  syncSalesPriorityFromIcp: async (companyId) => {
+    const baseFilter = companyFilter(companyId, {});
+
+    for (const priority of ["P1", "P2", "P3", "P4"]) {
+      await Prospect.updateMany(
+        { ...baseFilter, icpSalesPriority: priority },
+        { $set: { salesPriority: priority } }
+      );
+    }
+
+    await Prospect.updateMany(
+      { ...baseFilter, icpSalesPriority: null },
+      { $set: { salesPriority: null } }
+    );
+  },
+
+  // ── Suggest POC via Gemini AI ─────────────────────────────────────────────
+  // Scenario 1: contacts exist → pick best match based on ICP buyer persona
+  // Scenario 2: no contacts   → suggest target role + LinkedIn search tip
+  suggestPoc: async (prospectId, companyId) => {
+    const prospect = await prospectRepository.findById(prospectId, companyId);
+    if (!prospect) {
+      const err = new Error("Prospect not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    // Fetch all contacts linked to this account
+    const contacts = await Contact.find({ accountId: prospectId, companyId })
+      .select("firstName lastName email standardizedRoles functionalDomain isPrimary")
+      .lean();
+
+    // Build Gemini prompt — different for each scenario
+    const contactList = contacts.length > 0
+      ? contacts.map((c, i) =>
+          `${i + 1}. ${c.firstName || ""} ${c.lastName || ""} | Role: ${c.standardizedRoles || "Unknown"} | Dept: ${c.functionalDomain || "Unknown"} | Email: ${c.email || "N/A"}`
+        ).join("\n")
+      : "No contacts available";
+
+    const prompt = `
+You are a B2B sales intelligence assistant.
+
+Company Info:
+- Name: ${prospect.accountName}
+- Industry: ${prospect.primaryIndustry || "N/A"}
+- Business Model: ${prospect.businessModel || "N/A"}
+- Employees: ${prospect.noOfEmployees || "N/A"}
+- Revenue: ${prospect.annualRevenue || "N/A"}
+- Intent Signal: ${prospect.intentSignal || "N/A"}
+- CLV Ranking: ${prospect.clvRanking || "N/A"}
+
+Existing Contacts:
+${contactList}
+
+Task:
+${contacts.length > 0
+  ? "From the contacts above, identify who is the BEST point of contact (decision maker) for a B2B sales outreach. Pick one."
+  : "No contacts exist. Suggest the best TARGET ROLE to find on LinkedIn for B2B sales outreach."
+}
+
+Return ONLY valid JSON (no markdown, no explanation):
+${contacts.length > 0
+  ? `{
+  "scenario": "contacts_exist",
+  "recommendedIndex": <0-based index from contacts list>,
+  "recommendedRole": "<their role>",
+  "reason": "<1 line why this person>",
+  "confidenceLevel": "High | Medium | Low"
+}`
+  : `{
+  "scenario": "no_contacts",
+  "recommendedContactId": null,
+  "targetRole": "<best role to search>",
+  "targetDepartment": "<department>",
+  "searchSuggestion": "<one line — what to search on LinkedIn>",
+  "reason": "<1 line why this role>",
+  "confidenceLevel": "High | Medium | Low"
+}`
+}`;
+
+    // Call Gemini API
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const response  = await fetch(geminiUrl, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+
+    if (!response.ok) {
+      const err = new Error("Gemini API error");
+      err.statusCode = 502;
+      throw err;
+    }
+
+    const data    = await response.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const cleaned = content.replace(/```json|```/g, "").trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      throw new Error("Could not parse Gemini response");
+    }
+
+    // Scenario 1 — attach the actual contact object to result
+    if (parsed.scenario === "contacts_exist" && parsed.recommendedIndex != null) {
+      const recommended = contacts[parsed.recommendedIndex] || null;
+      return {
+        scenario:          "contacts_exist",
+        recommendedContact: recommended,
+        reason:            parsed.reason,
+        confidenceLevel:   parsed.confidenceLevel,
+      };
+    }
+
+    // Scenario 2 — no contacts, return role suggestion
+    return {
+      scenario:         "no_contacts",
+      targetRole:       parsed.targetRole,
+      targetDepartment: parsed.targetDepartment,
+      searchSuggestion: parsed.searchSuggestion,
+      reason:           parsed.reason,
+      confidenceLevel:  parsed.confidenceLevel,
+    };
+  },
+
   // Export all matching prospects to Excel file — FR-2.2
   // Supports same filters as getAll, no pagination limit
-  exportToExcel: async (query) => {
-    const { search, primaryIndustry, country, salesPriority, clvRanking, businessModel } = query;
+  exportToExcel: async (companyId, query) => {
+    const { search, industry, primaryIndustry, country, salesPriority, clvRanking, businessModel } = query;
 
-    const filter = {};
-    if (search)          filter.$or            = [{ accountName: { $regex: search, $options: "i" } }, { website: { $regex: search, $options: "i" } }];
-    if (primaryIndustry) filter.primaryIndustry = primaryIndustry;
+    const filter = companyFilter(companyId, {});
+    if (search) {
+      filter.$or = [
+        { accountName: { $regex: search, $options: "i" } },
+        { website: { $regex: search, $options: "i" } },
+      ];
+    }
+    const industryFilter = buildIndustryFilter(industry, primaryIndustry);
+    if (industryFilter) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(industryFilter);
+    }
     if (country)         filter.country         = { $regex: country, $options: "i" };
     if (salesPriority)   filter.salesPriority   = salesPriority;
     if (clvRanking)      filter.clvRanking      = clvRanking;
@@ -252,8 +509,33 @@ const prospectService = {
       filter, page: 1, limit: 999999, sort: { createdAt: -1 },
     });
 
+    const prospectIds = prospects.map((p) => p._id);
+    const contacts = prospectIds.length > 0
+      ? await Contact.find({ accountId: { $in: prospectIds }, companyId })
+          .sort({ isPrimary: -1, createdAt: 1 })
+          .lean()
+      : [];
+
+    const contactMap = {};
+    for (const c of contacts) {
+      const key = c.accountId?.toString();
+      if (key && !contactMap[key]) contactMap[key] = c;
+    }
+
     // Map each prospect to a flat row for Excel
-    const rows = prospects.map((p) => ({
+    const rows = prospects.map((p) => {
+      const contact = contactMap[p._id.toString()];
+      const contactName = contact
+        ? [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim()
+        : "";
+      const contactEmail       = contact?.email ?? "";
+      const contactDesignation = contact?.standardizedRoles ?? "";
+      const contactDepartment  = contact?.functionalDomain ?? "";
+      const contactPhone       = contact?.primaryPhone ?? contact?.primaryMobNo ?? "";
+      const contactPhone2      = contact?.secondaryPhone ?? "";
+      const contactLinkedIn    = contact?.linkedIn ?? "";
+
+      return {
       "Account Name":         p.accountName        || "",
       "Website":              p.website            || "",
       "Primary Industry":     p.primaryIndustry    || "",
@@ -274,14 +556,15 @@ const prospectService = {
       "Campaign Name":        p.campaignName       || "",
       "Comments":             p.comments           || "",
       "Source":               p.accountSource      || "",
-      "Contact Name":         p.contacts?.[0]?.name        || "",
-      "Designation":          p.contacts?.[0]?.designation || "",
-      "Department":           p.contacts?.[0]?.department  || "",
-      "Email":                p.contacts?.[0]?.email       || "",
-      "Phone 1":              p.contacts?.[0]?.phone       || "",
-      "Phone 2":              p.contacts?.[0]?.phone2      || "",
-      "LinkedIn":             p.contacts?.[0]?.linkedIn    || "",
-    }));
+      "Contact Name":         contactName,
+      "Designation":          contactDesignation,
+      "Department":           contactDepartment,
+      "Email":                contactEmail,
+      "Phone 1":              contactPhone,
+      "Phone 2":              contactPhone2,
+      "LinkedIn":             contactLinkedIn,
+    };
+    });
 
     // Build Excel workbook from rows array
     const worksheet = utils.json_to_sheet(rows);

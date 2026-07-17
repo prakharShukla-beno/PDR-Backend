@@ -2,6 +2,12 @@ import mongoose from "mongoose";
 
 const contactSchema = new mongoose.Schema(
   {
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      default: null,
+    },
+
     // ── Account Reference ────────────────────────────────────────────────────
     // Apollo style — contact can exist without an associated account
     accountId: {
@@ -92,6 +98,7 @@ const contactSchema = new mongoose.Schema(
     },
     keyFocusAreas:     { type: String, trim: true, default: null },
     standardizedRoles: { type: String, trim: true, default: null },
+    seniority:         { type: String, trim: true, default: null },
 
     // ── Contact Info ─────────────────────────────────────────────────────────
     email:                   { type: String, trim: true, lowercase: true, default: null },
@@ -165,6 +172,8 @@ contactSchema.pre("insertMany", function (next, docs) {
 
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
+contactSchema.index({ companyId: 1 });
+contactSchema.index({ companyId: 1, accountId: 1 });
 // Account link indexes
 contactSchema.index({ accountId: 1 });
 contactSchema.index({ accountName: 1 });

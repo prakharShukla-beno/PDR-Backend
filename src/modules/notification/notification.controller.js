@@ -24,7 +24,7 @@ const notificationController = {
   // PUT /api/notifications/:id/read — mark a single notification as read
   markRead: async (req, res, next) => {
     try {
-      const notification = await notificationService.markRead(
+      const notification = await notificationService.markAsRead(
         req.params.id,
         req.user._id
       );

@@ -1,6 +1,10 @@
 import contactRepository from "./contact.repository.js";
+import Contact          from "./contact.model.js";
 import Prospect          from "../prospect/prospect.model.js";
 import campaignRepository from "../campaign/campaign.repository.js";
+import { companyFilter } from "../../common/utils/tenantScope.js";
+import { dedupeContactsForAccount } from "../../common/utils/contactDedup.js";
+import { resolveContactAccountLinks, resolveContactAccountLink } from "../../common/utils/resolveContactAccountLinks.js";
 
 // Helper — extract denormalized account fields from a prospect
 const extractAccountFields = (prospect) => ({
@@ -20,14 +24,13 @@ const extractAccountFields = (prospect) => ({
 const contactService = {
 
   // Create single contact manually
-  create: async (data) => {
+  create: async (companyId, data) => {
     let accountId     = data.accountId || null;
     let isLinked      = false;
     let accountFields = {};
 
-    // If accountId provided -> fetch the prospect
     if (accountId) {
-      const prospect = await Prospect.findById(accountId).lean();
+      const prospect = await Prospect.findOne({ _id: accountId, companyId }).lean();
       if (prospect) {
         isLinked      = true;
         accountFields = extractAccountFields(prospect);
@@ -36,6 +39,7 @@ const contactService = {
     // If accountName provided -> search in DB
     else if (data.accountName) {
       const prospect = await Prospect.findOne({
+        companyId,
         accountName: { $regex: new RegExp(`^${data.accountName.trim()}$`, "i") },
       }).lean();
 
@@ -48,6 +52,7 @@ const contactService = {
 
     return await contactRepository.create({
       ...data,
+      companyId,
       accountId,
       isLinked,
       ...accountFields,   // accountIndustry, accountCountry etc. will be set
@@ -56,7 +61,7 @@ const contactService = {
   },
 
   // Get all contacts with filters + pagination
-  getAll: async (query) => {
+  getAll: async (companyId, query) => {
     const {
       page  = 1, limit = 10, search,
       accountId, functionalDomain, country,
@@ -64,7 +69,7 @@ const contactService = {
       sortBy = "createdAt", sortOrder = "desc",
     } = query;
 
-    const filter = {};
+    const filter = companyFilter(companyId, {});
     if (search) {
       filter.$or = [
         { firstName:         { $regex: search, $options: "i" } },
@@ -85,8 +90,10 @@ const contactService = {
       filter, page: Number(page), limit: Number(limit), sort,
     });
 
+    const resolvedContacts = await resolveContactAccountLinks(contacts, companyId);
+
     return {
-      contacts,
+      contacts: resolvedContacts,
       pagination: {
         total, page: Number(page), limit: Number(limit),
         totalPages: Math.ceil(total / Number(limit)),
@@ -94,43 +101,108 @@ const contactService = {
     };
   },
 
-  getById: async (id) => {
-    const contact = await contactRepository.findById(id);
+  getById: async (id, companyId) => {
+    const contact = await contactRepository.findById(id, companyId);
     if (!contact) {
       const error = new Error("Contact not found");
       error.statusCode = 404;
       throw error;
     }
-    return contact;
+    return await resolveContactAccountLink(contact, companyId);
   },
 
-  getByAccountId: async (accountId) => {
-    return await contactRepository.findByAccountId(accountId);
+  getByAccountId: async (accountId, companyId) => {
+    const prospect = await Prospect.findOne({ _id: accountId, companyId }).lean();
+    const prospectName = prospect?.accountName?.trim() || "";
+
+    // Step 1: Get contacts directly linked by accountId
+    // Step 2: Also find unlinked contacts whose accountName matches (case-insensitive contains)
+    // Two separate queries — simple, reliable, no $expr tricks
+    const byId = await Contact.find({ accountId, companyId })
+      .populate("campaignIds", "name status")
+      .sort({ isPrimary: -1, createdAt: -1 })
+      .lean();
+
+    let byName = [];
+    if (prospectName) {
+      // Get all contacts where accountName contains prospectName OR prospectName contains accountName
+      const allUnlinked = await Contact.find({
+        companyId,
+        accountId: null,
+        accountName: { $nin: [null, ""] },
+      }).select("_id accountName").lean();
+
+      const nameMatched = allUnlinked.filter(c => {
+        const cName = (c.accountName || "").toLowerCase().trim();
+        const pName = prospectName.toLowerCase();
+        return cName.includes(pName) || pName.includes(cName);
+      });
+
+      if (nameMatched.length > 0) {
+        byName = await Contact.find({
+          _id: { $in: nameMatched.map(c => c._id) },
+          companyId,
+        })
+          .populate("campaignIds", "name status")
+          .sort({ isPrimary: -1, createdAt: -1 })
+          .lean();
+      }
+    }
+
+    // Merge — deduplicate by _id
+    const seen = new Set(byId.map(c => c._id.toString()));
+    const contacts = [...byId, ...byName.filter(c => !seen.has(c._id.toString()))];
+
+    // Auto-link unlinked contacts found by name — background, non-blocking
+    if (byName.length > 0 && prospect) {
+      const accountFields = {
+        accountId:            prospect._id,
+        isLinked:             true,
+        accountName:          prospect.accountName,
+        accountIndustry:      prospect.primaryIndustry || null,
+        accountCountry:       prospect.country         || null,
+        accountCity:          prospect.hqLocationCity  || null,
+        accountEmployees:     prospect.noOfEmployees   || null,
+        accountRevenue:       prospect.annualRevenue   || null,
+        accountBusinessModel: prospect.businessModel   || null,
+        accountSalesPriority: prospect.salesPriority   || null,
+        accountClvRanking:    prospect.clvRanking      || null,
+        accountTechFitScore:  prospect.techFitScore    || null,
+        accountIntentSignal:  prospect.intentSignal    || null,
+        accountWebsite:       prospect.website         || null,
+      };
+      Contact.updateMany(
+        { _id: { $in: byName.map(c => c._id) }, companyId },
+        { $set: accountFields }
+      ).catch(() => {});
+    }
+
+    return dedupeContactsForAccount(contacts);
   },
 
-  update: async (id, data) => {
-    const exists = await contactRepository.findById(id);
+  update: async (id, data, companyId) => {
+    const exists = await contactRepository.findById(id, companyId);
     if (!exists) {
       const error = new Error("Contact not found");
       error.statusCode = 404;
       throw error;
     }
-    return await contactRepository.update(id, data);
+    return await contactRepository.update(id, data, companyId);
   },
 
-  delete: async (id) => {
-    const exists = await contactRepository.findById(id);
+  delete: async (id, companyId) => {
+    const exists = await contactRepository.findById(id, companyId);
     if (!exists) {
       const error = new Error("Contact not found");
       error.statusCode = 404;
       throw error;
     }
-    await contactRepository.delete(id);
+    await contactRepository.delete(id, companyId);
     return { message: "Contact deleted successfully" };
   },
 
-  addToCampaign: async (contactId, campaignId) => {
-    const contact = await contactRepository.findById(contactId);
+  addToCampaign: async (contactId, campaignId, companyId) => {
+    const contact = await contactRepository.findById(contactId, companyId);
     if (!contact) {
       const error = new Error("Contact not found");
       error.statusCode = 404;
@@ -142,17 +214,102 @@ const contactService = {
       error.statusCode = 404;
       throw error;
     }
-    return await contactRepository.addCampaign(contactId, campaignId);
+    return await contactRepository.addCampaign(contactId, campaignId, companyId);
   },
 
-  removeFromCampaign: async (contactId, campaignId) => {
-    const contact = await contactRepository.findById(contactId);
+  removeFromCampaign: async (contactId, campaignId, companyId) => {
+    const contact = await contactRepository.findById(contactId, companyId);
     if (!contact) {
       const error = new Error("Contact not found");
       error.statusCode = 404;
       throw error;
     }
-    return await contactRepository.removeCampaign(contactId, campaignId);
+    return await contactRepository.removeCampaign(contactId, campaignId, companyId);
+  },
+
+  linkToAccount: async (contactId, prospectId, companyId) => {
+    const contact = await contactRepository.findById(contactId, companyId);
+    if (!contact) {
+      const error = new Error("Contact not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const prospect = await Prospect.findOne({ _id: prospectId, companyId }).lean();
+    if (!prospect) {
+      const error = new Error("Account not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const accountFields = extractAccountFields(prospect);
+
+    return await contactRepository.update(contactId, {
+      accountId:   prospect._id,
+      accountName: prospect.accountName,
+      isLinked:    true,
+      ...accountFields,
+    }, companyId);
+  },
+
+  // Unlink a contact from its account — Apollo style
+  // Contact record itself is NOT deleted, only the account association is cleared
+  unlinkFromAccount: async (contactId, companyId) => {
+    const contact = await contactRepository.findById(contactId, companyId);
+    if (!contact) {
+      const error = new Error("Contact not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return await contactRepository.update(contactId, {
+      accountId:            null,
+      accountName:          null,
+      isLinked:             false,
+      accountIndustry:      null,
+      accountCountry:       null,
+      accountCity:          null,
+      accountEmployees:     null,
+      accountRevenue:       null,
+      accountBusinessModel: null,
+      accountSalesPriority: null,
+      accountClvRanking:    null,
+      accountTechFitScore:  null,
+      accountIntentSignal:  null,
+      accountWebsite:       null,
+    }, companyId);
+  },
+
+  bulkLinkByName: async (companyId) => {
+    const unlinked = await contactRepository.findAll({
+      filter: companyFilter(companyId, { isLinked: false, accountName: { $ne: null } }),
+      page: 1, limit: 99999, sort: { createdAt: -1 },
+    });
+
+    let linked = 0, skipped = 0;
+
+    for (const contact of unlinked.contacts) {
+      if (!contact.accountName) { skipped++; continue; }
+
+      const prospect = await Prospect.findOne({
+        companyId,
+        accountName: { $regex: new RegExp("^" + contact.accountName.trim() + "$", "i") },
+      }).lean();
+
+      if (prospect) {
+        const accountFields = extractAccountFields(prospect);
+        await contactRepository.update(contact._id, {
+          accountId:   prospect._id,
+          isLinked:    true,
+          ...accountFields,
+        }, companyId);
+        linked++;
+      } else {
+        skipped++;
+      }
+    }
+
+    return { linked, skipped, total: unlinked.contacts.length };
   },
 };
 

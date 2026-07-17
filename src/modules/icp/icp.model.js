@@ -1,4 +1,17 @@
 import mongoose from "mongoose";
+import { INDUSTRIES } from "../../common/constants/taxonomy.js";
+
+const ICP_REGIONS = [
+  "North America (NA)",
+  "Europe",
+  "Asia-Pacific (APAC)",
+  "South Asia",
+  "Southeast Asia",
+  "Middle East",
+  "GCC",
+  "Latin America (LATAM)",
+  "Africa",
+];
 
 const icpSchema = new mongoose.Schema(
   {
@@ -20,48 +33,55 @@ const icpSchema = new mongoose.Schema(
     // ── Company filters ──────────────────────────────────────────────────────
     industries: {
       type: [String],
-      enum: [
-        "BFSI",
-        "IT & ITES",
-        "Media & Telecom",
-        "Healthcare & Life Sciences",
-        "Manufacturing & Automotive",
-        "Travel, Transport & Logistics",
-        "Real Estate & Construction",
-        "Public Sector, Gov & Education",
-        "Professional Services",
-        "Energy, Resources & Utilities",
-        "Retail & CPG",
-        "SaaS",
-        "Fintech",
-        "E-commerce",
-        "EdTech",
-      ],
+      enum: INDUSTRIES,
       default: [],
     },
+    commercialSectors: {
+      type: [String],
+      enum: INDUSTRIES,
+      default: [],
+    },
+    subSectors: { type: [String], default: [] },
+    mappedIndustries: { type: [String], default: [] },
     businessModels: {
       type: [String],
-      enum: ["B2B", "B2C", "B2B2C", "D2C", "E-Commerce", "Marketplace"],
+      enum: [
+        "B2B", "B2C", "B2B2C", "D2C", "SaaS", "E-Commerce", "Marketplace", "Franchise", "Non-Profit",
+      ],
       default: [],
     },
     annualRevenues: {
       type: [String],
       enum: [
-        "Seed <$1M", "Early $1M-$10M", "Scale-Up $10M-$50M",
-        "Mid-Market $50M-$250M", "Corporate $250M-$1B", "Enterprise $1B+",
+        "Seed <$1M",
+        "Early $1M-$10M",
+        "Scale-Up $10M-$50M",
+        "Mid-Market $50M-$250M",
+        "Corporate $250M-$1B",
+        "Enterprise $1B+",
+        // Legacy aliases (existing DB / import data)
+        "Growth $10M-$50M",
+        "Scale $50M-$100M",
+        "Mid-Market $100M-$500M",
+        "Enterprise $500M-$1B",
+        "Mega $1B+",
+        null,
       ],
       default: [],
     },
     employeeRanges: {
       type: [String],
-      enum: ["1-50", "51-200", "201-500", "501-1,000", "1,001-5,000", "5,000+"],
+      enum: [
+        "1-10", "11-50", "51-200", "201-500", "501-1,000",
+        "1,001-5,000", "5,001-10,000", "10,000+",
+      ],
       default: [],
     },
 
     // ── Target Market — replaces flat countries[] ────────────────────────────
     // Regions: include = match, exclude = block
-    targetRegionsInclude: { type: [String], default: [] },
-    targetRegionsExclude: { type: [String], default: [] },
+    targetRegionsInclude: { type: [String], enum: ICP_REGIONS, default: [] },
+    targetRegionsExclude: { type: [String], enum: ICP_REGIONS, default: [] },
 
     // Per-country exclusions within included regions (e.g. include APAC but exclude Pakistan)
     targetRegionCountriesExclude: { type: [String], default: [] },
@@ -75,7 +95,8 @@ const icpSchema = new mongoose.Schema(
       type: [String],
       enum: [
         "Product Led", "SaaS / Subscriptions", "Professional Services",
-        "Retail / E-Com", "Network / Platform", "Regulated (Health/Fin)", "Public / Gov",
+        "Retail / E-Com", "Network / Platform", "Manufacturing / Industrial", "Media / Content",
+        "Regulated (Health/Fin)", "Public / Gov",
       ],
       default: [],
     },
@@ -93,19 +114,23 @@ const icpSchema = new mongoose.Schema(
 
     // ── Buyer Persona ────────────────────────────────────────────────────────
     buyerPersona: {
-      targetSeniorities: {
-        type: [String],
-        enum: ["C-Suite", "VP", "Director", "Manager", "Senior IC"],
-        default: [],
-      },
-      targetDepartments: { type: [String], default: [] },
-      targetDesignations: { type: [String], default: [] },
+      functionalDomains: { type: [String], default: [] },
+      seniorityLevels:   { type: [String], default: [] },
+      designations:      { type: [String], default: [] },
     },
 
     isActive: { type: Boolean, default: true },
+
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      default: null,
+    },
   },
   { timestamps: true }
 );
+
+icpSchema.index({ companyId: 1 });
 
 const ICP = mongoose.model("ICP", icpSchema);
 export default ICP;

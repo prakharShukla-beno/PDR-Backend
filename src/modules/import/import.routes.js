@@ -2,15 +2,16 @@ import { Router } from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import { fileURLToPath } from "url";
 import importController from "./import.controller.js";
 import authMiddleware from "../../common/middlewares/auth.middleware.js";
+import { editorPlus, viewerPlus } from "../../common/middlewares/rbac.middleware.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const uploadDir  = path.join(__dirname, "../../../uploads");
 
-// Ensure uploads directory exists
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -18,6 +19,14 @@ if (!fs.existsSync(uploadDir)) {
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename:    (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+});
+
+const diskStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, os.tmpdir()),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || ".xlsx";
+    cb(null, `pdr-import-${Date.now()}${ext}`);
+  },
 });
 
 const fileFilter = (req, file, cb) => {
@@ -36,17 +45,27 @@ const fileFilter = (req, file, cb) => {
 };
 
 const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 1024 } });
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+  fileFilter,
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
+export const uploadToDisk = multer({
+  storage: diskStorage,
+  fileFilter,
+  limits: { fileSize: 50 * 1024 * 1024 },
+}).single("file");
 
 const router = Router();
 router.use(authMiddleware);
 
-// Upload account Excel file
-router.post("/excel", upload.single("file"), importController.uploadExcel);
-
-// Resolve duplicates after user review
-router.post("/resolve-duplicates", importController.resolveDuplicates);
-
-// Check import status
-router.get("/status/:importLogId", importController.getStatus);
+router.post("/excel/preview",        editorPlus, upload.single("file"), importController.previewExcel);
+router.post("/excel",                editorPlus, upload.single("file"), importController.uploadExcel);
+router.post("/excel/async",          editorPlus, uploadToDisk, importController.importExcelAsync);
+router.get("/jobs",                  viewerPlus, importController.getImportJobs);
+router.post("/jobs/:jobId/cancel",   editorPlus, importController.cancelImportJob);
+router.get("/jobs/:jobId",           viewerPlus, importController.getImportJobStatus);
+router.post("/resolve-duplicates", editorPlus, importController.resolveDuplicates);
+router.get("/status/:importLogId", viewerPlus, importController.getStatus);
 
 export default router;

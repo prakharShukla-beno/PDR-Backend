@@ -3,25 +3,90 @@ import prospectRepository from "../prospect/prospect.repository.js";
 import contactRepository from "../contacts/contact.repository.js";
 import Contact from "../contacts/contact.model.js";
 import auditLogService from "../auditLog/auditLog.service.js";
+import dashboardService from "../dashboard/dashboard.service.js";
+import {
+  saveContactsForProspect,
+} from "../../common/utils/contactImportHelpers.js";
+import { normEmail } from "../../common/utils/contactDedup.js";
+import { companyObjectId } from "../../common/utils/tenantScope.js";
+import Prospect from "../prospect/prospect.model.js";
+import Duplicate from "./duplicate.model.js";
+
+const repairOrphanedDuplicates = async (companyId) => {
+  const cid = companyObjectId(companyId);
+
+  const prospectOrphans = await Duplicate.find({
+    entityType: "Prospect",
+    status: "pending",
+    $or: [{ companyId: null }, { companyId: { $exists: false } }],
+  }).lean();
+
+  for (const dup of prospectOrphans) {
+    const linked = await Prospect.findById(dup.prospectId1).select("_id companyId").lean();
+    if (linked?.companyId?.toString() === cid.toString()) {
+      await Duplicate.updateOne({ _id: dup._id }, { $set: { companyId: cid } });
+      continue;
+    }
+
+    const accountName = dup.newData?.accountName;
+    if (!accountName) continue;
+
+    const resolved = await Prospect.findOne({
+      companyId: cid,
+      accountNameLower: String(accountName).toLowerCase().trim(),
+    }).select("_id").lean();
+
+    if (resolved) {
+      await Duplicate.updateOne(
+        { _id: dup._id },
+        { $set: { prospectId1: resolved._id, companyId: cid } }
+      );
+    }
+  }
+
+  const contactOrphans = await Duplicate.find({
+    entityType: "Contact",
+    status: "pending",
+    $or: [{ companyId: null }, { companyId: { $exists: false } }],
+  }).lean();
+
+  for (const dup of contactOrphans) {
+    const linked = await Contact.findById(dup.prospectId1).select("_id companyId").lean();
+    if (linked?.companyId?.toString() !== cid.toString()) continue;
+    await Duplicate.updateOne({ _id: dup._id }, { $set: { companyId: cid } });
+  }
+};
 
 const duplicateService = {
 
-  getAll: async (query) => {
-    const { page = 1, limit = 10, status, type } = query;
+  getAll: async (query, companyId) => {
+    await repairOrphanedDuplicates(companyId);
+
+    const { page = 1, limit = 10, status, type, entityType } = query;
     const filter = {};
     if (status) filter.status = status;
-    // type=import → newData wale | type=manual → prospectId2 wale
     if (type === "import") filter.newData = { $ne: null };
     if (type === "manual") filter.prospectId2 = { $ne: null };
 
-    const { duplicates, total } = await duplicateRepository.findAll({
+    const cid = companyObjectId(companyId);
+    const baseFilter = { ...filter, companyId: cid };
+
+    const { duplicates, total } = await duplicateRepository.findAllForCompany({
+      companyId,
       filter,
-      page:  Number(page),
+      page: Number(page),
       limit: Number(limit),
+      entityType: entityType === "Contact" || entityType === "Prospect" ? entityType : undefined,
     });
+
+    const [accountTotal, contactTotal] = await Promise.all([
+      Duplicate.countDocuments({ ...baseFilter, entityType: "Prospect" }),
+      Duplicate.countDocuments({ ...baseFilter, entityType: "Contact" }),
+    ]);
 
     return {
       duplicates,
+      counts: { accounts: accountTotal, contacts: contactTotal },
       pagination: {
         total,
         page:       Number(page),
@@ -72,26 +137,36 @@ const duplicateService = {
 
     if (!duplicate.newData) throw Object.assign(new Error("No newData to save"), { statusCode: 400 });
 
-    // Detect if this is a contact duplicate (matched on email field)
-    const isContactDup = duplicate.matchFields?.includes("email") && !duplicate.matchFields?.includes("accountName");
+    const isContactDup = duplicate.entityType === "Contact";
 
     if (isContactDup) {
       // Save as new contact
       const { _id, ...contactData } = duplicate.newData;
       await Contact.create({
         ...contactData,
+        companyId: contactData.companyId ?? null,
         importLogId: duplicate.importLogId,
         source: contactData.source || "excel",
       });
     } else {
       // Save as new prospect (account)
       const { contacts, ...prospectData } = duplicate.newData;
-      await prospectRepository.create({
+      const created = await prospectRepository.create({
         ...prospectData,
         isDuplicate: true,
         source:      "excel",
         importLogId: duplicate.importLogId,
       });
+
+      if (contacts?.length) {
+        await saveContactsForProspect(
+          Contact,
+          { contacts, accountName: created.accountName },
+          created,
+          duplicate.importLogId,
+          created.companyId
+        );
+      }
     }
 
     const updated = await duplicateRepository.update(id, {
@@ -144,17 +219,19 @@ const duplicateService = {
     if (!duplicate) throw Object.assign(new Error("Not found"), { statusCode: 404 });
     if (duplicate.status !== "pending") throw Object.assign(new Error(`Already ${duplicate.status}`), { statusCode: 400 });
 
-    // Detect if this is a contact duplicate
-    const isContactDup = duplicate.matchFields?.includes("email") && !duplicate.matchFields?.includes("accountName");
+    const isContactDup = duplicate.entityType === "Contact";
 
     if (isContactDup) {
-      // Merge contact: update existing contact with new data (only fill empty fields)
-      const existingContact = await Contact.findById(duplicate.prospectId1._id || duplicate.prospectId1);
+      const contactId = duplicate.prospectId1._id || duplicate.prospectId1;
+      const contactScope = duplicate.companyId
+        ? { _id: contactId, companyId: duplicate.companyId }
+        : { _id: contactId };
+      const existingContact = await Contact.findOne(contactScope);
       if (!existingContact) throw Object.assign(new Error("Existing contact not found"), { statusCode: 404 });
 
       if (duplicate.newData) {
         const contactMergeFields = [
-          "standardizedRoles", "functionalDomain", "keyFocusAreas",
+          "standardizedRoles", "functionalDomain", "keyFocusAreas", "seniority",
           "primaryPhone", "secondaryPhone", "primaryMobNo",
           "linkedIn", "twitterUrl", "country", "state", "city", "timeZone",
           "accountId", "accountName", "accountIndustry", "accountCountry",
@@ -167,7 +244,7 @@ const duplicateService = {
           }
         }
         if (Object.keys(updateData).length > 0) {
-          await Contact.findByIdAndUpdate(existingContact._id, { $set: updateData });
+          await Contact.findOneAndUpdate(contactScope, { $set: updateData });
         }
       }
 
@@ -210,15 +287,37 @@ const duplicateService = {
       if (Object.keys(updateData).length > 0) {
         await prospectRepository.update(winner._id, updateData);
       }
+
+      if (duplicate.newData.contacts?.length) {
+        await saveContactsForProspect(
+          Contact,
+          duplicate.newData,
+          winner,
+          duplicate.importLogId,
+          winner.companyId
+        );
+      }
     }
 
     // Manual duplicate — merge loser into winner
     if (duplicate.prospectId2) {
       const loser = await prospectRepository.findById(duplicate.prospectId2._id || duplicate.prospectId2);
       if (loser) {
-        await contactRepository.updateMany(
-          { accountId: loser._id },
-          {
+        const winnerEmails = new Set(
+          (await Contact.find({ accountId: winner._id, companyId: winner.companyId }).select("email").lean())
+            .map((c) => normEmail(c.email))
+            .filter(Boolean)
+        );
+
+        const loserContacts = await Contact.find({
+          accountId: loser._id,
+          companyId: loser.companyId ?? winner.companyId,
+        }).lean();
+        for (const contact of loserContacts) {
+          const email = normEmail(contact.email);
+          if (email && winnerEmails.has(email)) continue;
+
+          await Contact.findByIdAndUpdate(contact._id, {
             $set: {
               accountId:   winner._id,
               accountName: winner.accountName,
@@ -230,8 +329,8 @@ const duplicateService = {
               accountSalesPriority: winner.salesPriority    || null,
               accountClvRanking:    winner.clvRanking       || null,
             },
-          }
-        );
+          });
+        }
         if (loser.campaignIds?.length > 0) {
           await prospectRepository.update(winner._id, {
             $addToSet: { campaignIds: { $each: loser.campaignIds } },
@@ -259,15 +358,34 @@ const duplicateService = {
     return updated;
   },
 
+  // ── Delete — hard delete the duplicate record itself (not the prospects) ──
+  deleteDuplicate: async (id, userId) => {
+    const duplicate = await duplicateRepository.findById(id);
+    if (!duplicate) throw Object.assign(new Error("Duplicate record not found"), { statusCode: 404 });
+
+    await duplicateRepository.delete(id);
+
+    await auditLogService.log({
+      userId,
+      action:      "DELETE",
+      entity:      "Duplicate",
+      entityId:    id,
+      description: `Duplicate record hard deleted`,
+    });
+
+    return { deleted: true, id };
+  },
+
   // ── Bulk action — apply same action to multiple IDs ───────────────────────
   bulkAction: async (ids, action, userId) => {
     const results = { success: 0, failed: 0, errors: [] };
 
     for (const id of ids) {
       try {
-        if (action === "merge")     await duplicateService.merge(id, userId);
-        else if (action === "skip") await duplicateService.skip(id, userId);
-        else if (action === "keep-both") await duplicateService.keepBoth(id, userId);
+        if (action === "merge")           await duplicateService.merge(id, userId);
+        else if (action === "skip")       await duplicateService.skip(id, userId);
+        else if (action === "keep-both")  await duplicateService.keepBoth(id, userId);
+        else if (action === "delete")     await duplicateService.deleteDuplicate(id, userId);
         results.success++;
       } catch (err) {
         results.failed++;
@@ -276,6 +394,92 @@ const duplicateService = {
     }
 
     return results;
+  },
+
+  checkDuplicates: async (companyId, importLogId = null) => {
+    const cid = companyObjectId(companyId);
+    const filter = { companyId: cid };
+    if (importLogId) filter.importLogId = importLogId;
+
+    const prospects = await Prospect.find(filter)
+      .select("_id accountName website importLogId")
+      .lean();
+
+    let duplicateCount = 0;
+    const BATCH = 500;
+
+    for (let i = 0; i < prospects.length; i += BATCH) {
+      const batch = prospects.slice(i, i + BATCH);
+      const names = batch.map((p) => p.accountName).filter(Boolean);
+      const websites = batch.map((p) => p.website).filter(Boolean);
+      const batchIds = batch.map((p) => p._id);
+
+      const matches = await Prospect.find({
+        companyId: cid,
+        _id: { $nin: batchIds },
+        $or: [
+          ...(names.length ? [{ accountName: { $in: names } }] : []),
+          ...(websites.length ? [{ website: { $in: websites } }] : []),
+        ],
+      })
+        .select("_id accountName website")
+        .lean();
+
+      const matchByName = new Map();
+      const matchByWebsite = new Map();
+      for (const m of matches) {
+        if (m.accountName) {
+          matchByName.set(m.accountName.toLowerCase(), m);
+        }
+        if (m.website) {
+          matchByWebsite.set(m.website.toLowerCase(), m);
+        }
+      }
+
+      for (const p of batch) {
+        const nameKey = p.accountName?.toLowerCase();
+        const siteKey = p.website?.toLowerCase();
+        const nameMatch = nameKey ? matchByName.get(nameKey) : null;
+        const websiteMatch = siteKey ? matchByWebsite.get(siteKey) : null;
+        const existing = nameMatch || websiteMatch;
+
+        if (!existing) continue;
+
+        const matchFields = [
+          nameMatch && "accountName",
+          websiteMatch && "website",
+        ].filter(Boolean);
+
+        duplicateCount++;
+
+        await Prospect.findByIdAndUpdate(p._id, {
+          isDuplicate: true,
+        });
+
+        try {
+          await duplicateRepository.create({
+            prospectId1: existing._id,
+            entityType: "Prospect",
+            newData: {
+              accountName: p.accountName,
+              website: p.website,
+            },
+            matchFields,
+            source: "import",
+            importLogId: p.importLogId || importLogId || null,
+            status: "pending",
+            companyId: cid,
+          });
+        } catch {
+          // skip duplicate-of-duplicate record conflicts
+        }
+      }
+    }
+
+    return {
+      checked: prospects.length,
+      duplicateCount,
+    };
   },
 };
 

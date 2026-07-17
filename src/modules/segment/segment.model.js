@@ -21,6 +21,12 @@ const segmentSchema = new mongoose.Schema(
       default: false,
     },
 
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      default: null,
+    },
+
     // ICP reference — agar ICP se segment bana hai
     // ICP ke region/techStack filters yahan se use honge
     icpId: {
@@ -43,11 +49,27 @@ const segmentSchema = new mongoose.Schema(
       tierFilter:      { type: [String], default: [] },
       priorityFilter:  { type: [String], default: [] },
       minFinalScore:   { type: Number,   default: null },
+      maxFinalScore:   { type: Number,   default: null },
+      regionsInclude:  { type: [String], default: [] },
+      regionsExclude:  { type: [String], default: [] },
+      techStackInclude:{ type: [String], default: [] },
+      techStackExclude:{ type: [String], default: [] },
+      techFitScores:   { type: [Number], default: [] },
+      designations:    { type: [String], default: [] },
+      seniorityLevels: { type: [String], default: [] },
+      enriched:        { type: Boolean,  default: null },
     },
 
     // Stored snapshot of matched prospect IDs (Apollo style)
     // Saved at create/sync time — not recalculated every open
     matchedAccountIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Prospect",
+    }],
+
+    // Accounts manually added from the accounts page (not from ICP filter match).
+    // Preserved across Sync / Enrich & Score snapshot rebuilds.
+    manuallyAddedAccountIds: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: "Prospect",
     }],
@@ -83,6 +105,7 @@ const segmentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+segmentSchema.index({ companyId: 1 });
 segmentSchema.index({ createdBy: 1 });
 segmentSchema.index({ isShared: 1 });
 segmentSchema.index({ icpId: 1 });          // ICP se segment dhundne ke liye

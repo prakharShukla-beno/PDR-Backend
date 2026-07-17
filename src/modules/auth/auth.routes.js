@@ -2,16 +2,16 @@ import { Router } from "express";
 import { body } from "express-validator";
 import authController from "./auth.controller.js";
 import { registerValidation, loginValidation } from "./auth.validation.js";
+import authMiddleware from "../../common/middlewares/auth.middleware.js";
 
 const router = Router();
 
-// POST /api/auth/register
 router.post("/register", registerValidation, authController.register);
-
-// POST /api/auth/login
 router.post("/login", loginValidation, authController.login);
+router.post("/refresh", authController.refreshToken);
+router.post("/logout", authMiddleware, authController.logout);
+router.get("/me", authMiddleware, authController.getMe);
 
-// POST /api/auth/forgot-password
 router.post(
   "/forgot-password",
   [
@@ -23,7 +23,6 @@ router.post(
   authController.forgotPassword
 );
 
-// POST /api/auth/reset-password
 router.post(
   "/reset-password",
   [

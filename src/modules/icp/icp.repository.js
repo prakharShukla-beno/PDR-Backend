@@ -1,15 +1,17 @@
 import ICP from "./icp.model.js";
 
+const scopedFilter = (id, companyId) =>
+  companyId ? { _id: id, companyId } : { _id: id };
+
 const icpRepository = {
 
-  // Create a new ICP profile
   create: async (data) => {
     return await ICP.create(data);
   },
 
-  // Fetch all ICP profiles
-  findAll: async ({ page = 1, limit = 10, isActive }) => {
+  findAll: async ({ page = 1, limit = 10, isActive, companyId }) => {
     const filter = {};
+    if (companyId) filter.companyId = companyId;
     if (isActive !== undefined) filter.isActive = isActive === "true";
 
     const skip = (page - 1) * limit;
@@ -26,22 +28,19 @@ const icpRepository = {
     return { profiles, total };
   },
 
-  // Single ICP profile by ID
-  findById: async (id) => {
-    return await ICP.findById(id).populate("createdBy", "name email");
+  findById: async (id, companyId) => {
+    return await ICP.findOne(scopedFilter(id, companyId)).populate("createdBy", "name email");
   },
 
-  // Update an ICP profile
-  update: async (id, data) => {
-    return await ICP.findByIdAndUpdate(id, data, {
+  update: async (id, data, companyId) => {
+    return await ICP.findOneAndUpdate(scopedFilter(id, companyId), data, {
       new: true,
       runValidators: true,
     });
   },
 
-  // Delete an ICP profile
-  delete: async (id) => {
-    return await ICP.findByIdAndDelete(id);
+  delete: async (id, companyId) => {
+    return await ICP.findOneAndDelete(scopedFilter(id, companyId));
   },
 };
 

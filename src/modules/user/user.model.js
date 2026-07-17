@@ -32,6 +32,42 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      default: null,
+    },
+    role: {
+      type: String,
+      enum: ["admin", "editor", "viewer"],
+      default: "editor",
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    inviteToken: {
+      type: String,
+      default: null,
+    },
+    inviteTokenExpiry: {
+      type: Date,
+      default: null,
+    },
+    inviteAccepted: {
+      type: Boolean,
+      default: false,
+    },
+    invitedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    lastLoginAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );

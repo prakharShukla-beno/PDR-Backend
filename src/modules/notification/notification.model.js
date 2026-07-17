@@ -10,7 +10,7 @@ const notificationSchema = new mongoose.Schema(
     type: {
       type: String,
       required: [true, "Notification type is required"],
-      enum: ["import_complete", "enrichment_done", "dedup_complete", "campaign_update"],
+      enum: ["import_complete", "enrichment_done", "enrichment_complete", "dedup_complete", "campaign_update"],
     },
     message: {
       type: String,

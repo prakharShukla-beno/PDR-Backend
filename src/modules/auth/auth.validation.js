@@ -2,6 +2,13 @@ import { body } from "express-validator";
 
 
 export const registerValidation = [
+  body("companyName")
+    .trim()
+    .notEmpty()
+    .withMessage("Company name is required")
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Company name must be between 2 and 100 characters"),
+
   body("name")
     .trim()
     .notEmpty()

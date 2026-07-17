@@ -1,15 +1,18 @@
 import duplicateService from "./duplicate.service.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const duplicateController = {
 
   // GET /api/duplicates — all duplicate pairs
   getAll: async (req, res, next) => {
     try {
-      const { page, limit, status } = req.query;
-      const result = await duplicateService.getAll({ page, limit, status });
+      const companyId = getCompanyIdFromRequest(req);
+      const { page, limit, status, entityType } = req.query;
+      const result = await duplicateService.getAll({ page, limit, status, entityType }, companyId);
       res.status(200).json({
         success: true,
         data:       result.duplicates,
+        counts:     result.counts,
         pagination: result.pagination,
       });
     } catch (error) {
@@ -61,6 +64,35 @@ const duplicateController = {
     } catch (error) { next(error); }
   },
 
+  // DELETE /api/duplicates/:id — hard delete the duplicate record
+  deleteDuplicate: async (req, res, next) => {
+    try {
+      const result = await duplicateService.deleteDuplicate(req.params.id, req.user._id);
+      res.status(200).json({ success: true, message: "Duplicate record deleted", data: result });
+    } catch (error) { next(error); }
+  },
+
+  // POST /api/duplicates/check — scan prospects for duplicates
+  checkDuplicates: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const { importLogId } = req.body || {};
+
+      const result = await duplicateService.checkDuplicates(
+        companyId,
+        importLogId || null
+      );
+
+      res.status(200).json({
+        success: true,
+        message: `Duplicate check complete — ${result.duplicateCount} found`,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // POST /api/duplicates/bulk — bulk action on multiple IDs
   bulkAction: async (req, res, next) => {
     try {
@@ -68,8 +100,8 @@ const duplicateController = {
       if (!ids || !Array.isArray(ids) || ids.length === 0) {
         return res.status(400).json({ success: false, message: "ids array is required" });
       }
-      if (!["merge", "skip", "keep-both"].includes(action)) {
-        return res.status(400).json({ success: false, message: "action must be merge | skip | keep-both" });
+      if (!["merge", "skip", "keep-both", "delete"].includes(action)) {
+        return res.status(400).json({ success: false, message: "action must be merge | skip | keep-both | delete" });
       }
       const result = await duplicateService.bulkAction(ids, action, req.user._id);
       res.status(200).json({ success: true, message: `Bulk ${action} done`, data: result });

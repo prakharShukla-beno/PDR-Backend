@@ -1,11 +1,12 @@
 import segmentService from "./segment.service.js";
+import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const segmentController = {
 
-  // POST /api/segments
   create: async (req, res, next) => {
     try {
-      const segment = await segmentService.create(req.body, req.user._id);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.create(req.body, req.user._id, companyId);
       res.status(201).json({
         success: true,
         message: "Segment created successfully",
@@ -14,10 +15,10 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // GET /api/segments
   getAll: async (req, res, next) => {
     try {
-      const segments = await segmentService.getAll(req.user._id);
+      const companyId = getCompanyIdFromRequest(req);
+      const segments = await segmentService.getAll(req.user._id, companyId);
       res.status(200).json({
         success: true,
         data: { segments, total: segments.length },
@@ -25,10 +26,10 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // GET /api/segments/:id
   getById: async (req, res, next) => {
     try {
-      const segment = await segmentService.getById(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.getById(req.params.id, companyId);
       if (!segment) {
         return res.status(404).json({ success: false, message: "Segment not found" });
       }
@@ -36,10 +37,10 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // PUT /api/segments/:id
   update: async (req, res, next) => {
     try {
-      const segment = await segmentService.update(req.params.id, req.body);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.update(req.params.id, req.body, companyId);
       res.status(200).json({
         success: true,
         message: "Segment updated successfully",
@@ -48,29 +49,30 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // DELETE /api/segments/:id
   delete: async (req, res, next) => {
     try {
-      await segmentService.delete(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      await segmentService.delete(req.params.id, companyId);
       res.status(200).json({ success: true, message: "Segment deleted successfully" });
     } catch (error) { next(error); }
   },
 
-  // GET /api/segments/:id/accounts — paginated stored accounts + tier breakdown
   getAccounts: async (req, res, next) => {
     try {
-      const { page = 1, limit = 10 } = req.query;
+      const companyId = getCompanyIdFromRequest(req);
+      const { page = 1, limit = 10, ...filterQuery } = req.query;
       const result = await segmentService.getStoredAccounts(
-        req.params.id, Number(page), Number(limit)
+        req.params.id, Number(page), Number(limit), companyId, filterQuery
       );
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate");
       res.status(200).json({ success: true, data: result });
     } catch (error) { next(error); }
   },
 
-  // POST /api/segments/:id/sync — fresh query, update snapshot
   sync: async (req, res, next) => {
     try {
-      const segment = await segmentService.sync(req.params.id);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.sync(req.params.id, companyId);
       res.status(200).json({
         success: true,
         message: `Synced — ${segment.matchCount} accounts found`,
@@ -79,11 +81,55 @@ const segmentController = {
     } catch (error) { next(error); }
   },
 
-  // POST /api/segments/preview — live preview without saving
   preview: async (req, res, next) => {
     try {
-      const result = await segmentService.preview(req.body.filters || {});
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await segmentService.preview(req.body.filters || {}, companyId);
       res.status(200).json({ success: true, data: result });
+    } catch (error) { next(error); }
+  },
+
+  // POST /api/segments/:id/add-accounts
+  // Selected account IDs ko existing segment snapshot mein add karo (no duplicates)
+  addAccounts: async (req, res, next) => {
+    try {
+      const { accountIds } = req.body;
+      if (!Array.isArray(accountIds) || accountIds.length === 0) {
+        return res.status(400).json({ success: false, message: "accountIds array required" });
+      }
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.addAccounts(
+        req.params.id,
+        accountIds,
+        companyId
+      );
+      res.status(200).json({
+        success: true,
+        message: `${accountIds.length} account(s) added to segment`,
+        data: { matchCount: segment.matchCount },
+      });
+    } catch (error) { next(error); }
+  },
+
+  // POST /api/segments/:id/remove-accounts
+  // Selected account IDs ko segment se hatao — prospect DB se delete NAHI hoti
+  removeAccounts: async (req, res, next) => {
+    try {
+      const { accountIds } = req.body;
+      if (!Array.isArray(accountIds) || accountIds.length === 0) {
+        return res.status(400).json({ success: false, message: "accountIds array required" });
+      }
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.removeAccounts(
+        req.params.id,
+        accountIds,
+        companyId
+      );
+      res.status(200).json({
+        success: true,
+        message: `${accountIds.length} account(s) removed from segment`,
+        data: { matchCount: segment.matchCount },
+      });
     } catch (error) { next(error); }
   },
 
@@ -92,9 +138,11 @@ const segmentController = {
   // Background mein run hota hai — turant 202 return karta hai
   enrichAndScore: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const result = await segmentService.enrichAndScore(
         req.params.id,
-        req.user._id
+        req.user._id,
+        companyId
       );
       res.status(202).json({
         success: true,
@@ -102,7 +150,6 @@ const segmentController = {
         data:    result,
       });
     } catch (error) {
-      // Already running check
       if (error.message === "Enrichment already running for this segment") {
         return res.status(409).json({
           success: false,
@@ -111,6 +158,25 @@ const segmentController = {
       }
       next(error);
     }
+  },
+  // POST /api/segments/contacts
+  // Body: { segmentIds: ["id1", "id2", ...] }
+  // Returns deduped contacts across all accounts matched by the given segments
+  // Used by the Campaign wizard for multi-segment contact import
+  getContactsBySegments: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const { segmentIds } = req.body;
+      if (!Array.isArray(segmentIds) || segmentIds.length === 0) {
+        return res.status(400).json({ success: false, message: "segmentIds array required" });
+      }
+      const result = await segmentService.getContactsBySegments(segmentIds, companyId);
+      res.status(200).json({
+        success: true,
+        data: result.contacts,
+        accountCount: result.accountCount,
+      });
+    } catch (error) { next(error); }
   },
 };
 

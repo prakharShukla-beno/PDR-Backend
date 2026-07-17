@@ -40,7 +40,7 @@ const duplicateSchema = new mongoose.Schema(
     matchFields: {
       type: [String],
       required: [true, "Match fields are required"],
-      enum: ["accountName", "website", "email"],
+      enum: ["accountName", "website", "email", "primaryPhone", "nameAccount"],
     },
     similarityScore: {
       type: Number,
@@ -61,6 +61,12 @@ const duplicateSchema = new mongoose.Schema(
     },
     reviewedAt: {
       type: Date,
+      default: null,
+    },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      index: true,
       default: null,
     },
   },

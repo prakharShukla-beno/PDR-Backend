@@ -8,17 +8,23 @@ import router from "./routes/index.js";
 
 // ─── Model Imports ─────────────────────────────────────────────────────────────
 import "./modules/user/user.model.js";
+import "./modules/company/company.model.js";
 import "./modules/prospect/prospect.model.js";
 import "./modules/contacts/contact.model.js";
 import "./modules/campaign/campaign.model.js";
 import "./modules/importLog/importLog.model.js";
+import "./modules/import/importJob.model.js";
 import "./modules/interaction/interaction.model.js";
 import "./modules/enrichment/enrichment.model.js";
 import "./modules/notification/notification.model.js";
 import "./modules/duplicate/duplicate.model.js";
 import "./modules/icp/icp.model.js";
+import "./modules/segment/segment.model.js";
 
 const app = express();
+
+// JSON API responses must not return 304 with empty bodies (breaks client polling)
+app.set("etag", false);
 
 // ── Fix: parse array query params using `qs` so brackets become arrays
 // Example: countryInclude[]=India&countryInclude[]=USA → { countryInclude: ["India", "USA"] }
@@ -27,8 +33,34 @@ app.set("query parser", (str) =>
   qs.parse(str, { allowDots: true, arrayLimit: 100 })
 );
 
+const allowedOrigins = [
+  "https://benogroup.in",
+  "https://www.benogroup.in",
+  "http://localhost:3000",
+  process.env.FRONTEND_URL?.replace(/\/+$/, ""),
+].filter(Boolean);
+
+// Vercel preview deployments for this project, e.g.:
+// https://pdr-frontend-git-feature-x-username.vercel.app
+// https://pdr-frontend-abc123-team.vercel.app
+const isVercelPreview = (origin) =>
+  /^https:\/\/pdr-frontend[a-z0-9-]*\.vercel\.app$/i.test(origin);
+
 app.use(helmet());
-app.use(cors());
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true); // server-to-server, curl, etc.
+
+      if (allowedOrigins.includes(origin) || isVercelPreview(origin)) {
+        return callback(null, true);
+      }
+
+      callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  })
+);
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

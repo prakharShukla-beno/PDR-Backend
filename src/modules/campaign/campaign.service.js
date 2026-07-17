@@ -2,6 +2,7 @@ import Campaign from "./campaign.model.js";
 import campaignRepository from "./campaign.repository.js";
 import contactRepository from "../contacts/contact.repository.js";
 import auditLogService from "../auditLog/auditLog.service.js";
+import { companyUserIds, companyFilter } from "../../common/utils/tenantScope.js";
 
 const campaignService = {
 
@@ -26,11 +27,13 @@ const campaignService = {
   },
 
   // ── Get All ──────────────────────────────────────────────────────────────────
-  getAll: async (query) => {
+  getAll: async (query, companyId) => {
     const { page = 1, limit = 10 } = query;
+    const createdByIds = await companyUserIds(companyId);
     const { campaigns, total } = await campaignRepository.findAll({
       page:  Number(page),
       limit: Number(limit),
+      createdByIds,
     });
     return {
       campaigns,
@@ -75,7 +78,7 @@ const campaignService = {
   },
 
   // ── Delete ───────────────────────────────────────────────────────────────────
-  delete: async (id, userId) => {
+  delete: async (id, userId, companyId) => {
     const exists = await campaignRepository.findById(id);
     if (!exists) {
       const error = new Error("Campaign not found");
@@ -86,7 +89,7 @@ const campaignService = {
     // When a campaign is deleted, update the contacts' campaignIds too
     if (exists.contactIds?.length > 0) {
       await contactRepository.updateMany(
-        { _id: { $in: exists.contactIds } },
+        companyFilter(companyId, { _id: { $in: exists.contactIds } }),
         { $pull: { campaignIds: id } }
       );
     }
@@ -103,7 +106,7 @@ const campaignService = {
   },
 
   // ── Add Contacts — Apollo style ───────────────────────────────────────────────
-  addContacts: async (campaignId, contactIds, userId) => {
+  addContacts: async (campaignId, contactIds, userId, companyId) => {
     const campaign = await campaignRepository.findById(campaignId);
     if (!campaign) {
       const error = new Error("Campaign not found");
@@ -113,7 +116,7 @@ const campaignService = {
 
     // Validate contacts exist
     const validContacts = await contactRepository.findAll({
-      filter: { _id: { $in: contactIds } },
+      filter: companyFilter(companyId, { _id: { $in: contactIds } }),
       page: 1,
       limit: contactIds.length,
     });
@@ -131,7 +134,7 @@ const campaignService = {
 
     // Also add the campaign ID to the contacts' campaignIds
     await contactRepository.updateMany(
-      { _id: { $in: validIds } },
+      companyFilter(companyId, { _id: { $in: validIds } }),
       { $addToSet: { campaignIds: campaignId } }
     );
 
@@ -147,7 +150,7 @@ const campaignService = {
   },
 
   // ── Remove Contact ────────────────────────────────────────────────────────────
-  removeContact: async (campaignId, contactId, userId) => {
+  removeContact: async (campaignId, contactId, userId, companyId) => {
     const campaign = await campaignRepository.findById(campaignId);
     if (!campaign) {
       const error = new Error("Campaign not found");
@@ -160,7 +163,7 @@ const campaignService = {
     // Also remove the campaign ID from the contact's campaignIds
     await contactRepository.update(contactId, {
       $pull: { campaignIds: campaignId },
-    });
+    }, companyId);
 
     return { message: "Contact removed from campaign" };
   },

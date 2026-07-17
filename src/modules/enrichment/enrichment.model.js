@@ -22,7 +22,7 @@ const enrichmentSchema = new mongoose.Schema(
     priorityScore: {
       type: Number,
       min: 0,
-      max: 100,
+      max: 120,
       default: null,
     },
     enrichedBy: {
