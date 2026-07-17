@@ -177,6 +177,9 @@ const mapRowToContact = (rawRow) => {
 
     if (value !== null && value !== "" && value !== undefined) {
       mapped[schemaField] = String(value).trim();
+      if (schemaField === "email") {
+        console.log(`DEBUG mapRowToContact: email populated from column "${key}" (normalized "${normalizedKey}") = "${value}" -> "${mapped.email}"`);
+      }
     }
   }
 
@@ -212,7 +215,26 @@ const validateContactRow = (row, rowNumber) => {
     row.functionalDomain = null; // invalid value → null, row save hogi
   }
 
-  // NOTE: accountName and email/phone are not required
+  console.log('VALIDATE CONTACT ROW:', JSON.stringify({
+    email: row.email,
+    firstName: row.firstName,
+    lastName: row.lastName,
+    rowNumber
+  }));
+
+  // ── Email is required — skip rows missing it
+  if (!row.email) {
+    errors.push(`Row ${rowNumber}: email is required`);
+    return errors;
+  }
+
+  // ── Contact name is required — skip rows with no resolvable name
+  if (!row.firstName && !row.lastName) {
+    errors.push(`Row ${rowNumber}: contact name is required`);
+    return errors;
+  }
+
+  // NOTE: accountName is not required
   // Real-world data often has gaps — save the row where possible
   // isLinked will be false if accountName is not found
 

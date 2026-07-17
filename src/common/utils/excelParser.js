@@ -393,6 +393,9 @@ const mapRowToSchema = (rawRow, { skipContacts = false } = {}) => {
     } else {
       if (value !== null && value !== "") {
         mapped[schemaField] = String(value).trim();
+        if (schemaField === "website") {
+          console.log(`DEBUG mapRowToSchema: website populated from column "${key}" (normalized "${normalizedKey}") = "${value}" -> "${mapped.website}"`);
+        }
       }
     }
   }
@@ -479,6 +482,17 @@ const validateRow = (row, rowNumber) => {
 
   if (!row.accountName) {
     errors.push(`Row ${rowNumber}: accountName is required`);
+    return errors;
+  }
+
+  console.log('VALIDATE ROW:', JSON.stringify({
+    accountName: row.accountName,
+    website: row.website,
+    rowNumber
+  }));
+
+  if (!row.website) {
+    errors.push(`Row ${rowNumber}: website is required`);
     return errors;
   }
 

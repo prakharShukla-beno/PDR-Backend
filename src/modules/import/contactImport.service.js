@@ -83,7 +83,7 @@ const contactImportService = {
     if (!validRows || validRows.length === 0) {
       await importLogRepository.update(importLog._id, { status: "failed", failedCount: errorDetails.length });
       try { fs.unlinkSync(filePath); } catch (_) {}
-      return { importLogId: importLog._id, totalRows, successCount: 0, failedCount: errorDetails.length, duplicates: [], errorDetails, status: "failed" };
+      return { importLogId: importLog._id, totalRows, successCount: 0, failedCount: errorDetails.length, skippedCount: errorDetails.length, linkedCount: 0, unlinkedCount: 0, duplicates: [], errorDetails, status: "failed" };
     }
 
     // Get account map for linking
@@ -167,7 +167,12 @@ const contactImportService = {
       newRows.push(preparedRow);
     }
 
-    console.log(`📦 New: ${newRows.length} | DB Duplicates: ${duplicateRows.length} | In-file skipped: ${deferredInFileDups.length}`);
+    // Account matching never rejects a row — unmatched/absent accountName just means
+    // the contact is inserted with accountId: null, isLinked: false (unlinked).
+    const unlinkedCount = newRows.filter((r) => !r.isLinked).length;
+    const linkedCount   = newRows.length - unlinkedCount;
+
+    console.log(`📦 New: ${newRows.length} (${linkedCount} linked, ${unlinkedCount} unlinked) | DB Duplicates: ${duplicateRows.length} | In-file skipped: ${deferredInFileDups.length}`);
 
     let successCount = 0;
 
@@ -253,13 +258,19 @@ const contactImportService = {
       description: `Contact import — ${successCount} saved, ${duplicateRows.length} duplicates need review`,
     });
 
-    console.log(`🏁 Contact import — ${successCount} saved | ${duplicateRows.length} duplicates pending`);
+    console.log(
+      `🏁 Contact import — ${successCount} imported (${unlinkedCount} unlinked), ` +
+      `${errorDetails.length} skipped (missing email/name) | ${duplicateRows.length} duplicates pending`
+    );
 
     return {
       importLogId:   importLog._id,
       totalRows,
       successCount,
       failedCount:   allErrors.length,
+      skippedCount:  errorDetails.length, // rows skipped for missing required fields (email/name)
+      linkedCount,
+      unlinkedCount,
       duplicates:    duplicateRows,
       hasDuplicates,
       errorDetails:  allErrors,

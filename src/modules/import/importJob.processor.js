@@ -107,9 +107,14 @@ export async function startImportWorker(jobId, filePath, companyId) {
     const errorSamples = [];
     const validateStart = Date.now();
 
+    let debugRowsLogged = 0;
     for (const rawRow of rows) {
+      if (debugRowsLogged < 50) {
+        console.log(`DEBUG async worker raw row #${debugRowsLogged}:`, JSON.stringify(rawRow));
+        debugRowsLogged++;
+      }
       try {
-        const { isValid, normalizedRow } = validateAndNormalizeRow(
+        const { isValid, normalizedRow, reason } = validateAndNormalizeRow(
           rawRow,
           2,
           { skipContacts: true }
@@ -117,7 +122,7 @@ export async function startImportWorker(jobId, filePath, companyId) {
         if (!isValid) {
           errorCount++;
           if (errorSamples.length < 20) {
-            errorSamples.push({ reason: "Validation failed" });
+            errorSamples.push({ reason: reason || "Validation failed" });
           }
           continue;
         }
@@ -165,8 +170,8 @@ export async function startImportWorker(jobId, filePath, companyId) {
 
     const totalMs = readMs + validateMs + insertMs;
     console.log(
-      `Import ${jobId}: complete ✅ ${importedCount} inserted, ` +
-        `${errorCount} errors (read ${readMs}ms + validate ${validateMs}ms + insert ${insertMs}ms = ${totalMs}ms)`
+      `Import ${jobId}: complete ✅ ${importedCount} imported, ${errorCount} skipped ` +
+        `(missing/invalid required fields) (read ${readMs}ms + validate ${validateMs}ms + insert ${insertMs}ms = ${totalMs}ms)`
     );
 
     try {
