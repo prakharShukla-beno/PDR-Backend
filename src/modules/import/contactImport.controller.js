@@ -32,11 +32,16 @@ const contactImportController = {
         companyId,
       });
 
+      const unlinkedSuffix = result.unlinkedCount > 0 ? ` (${result.unlinkedCount} unlinked)` : "";
+      const skippedSuffix  = result.skippedCount > 0
+        ? ` ${result.skippedCount} skipped (missing email/name).`
+        : "";
+
       return res.status(200).json({
         success: true,
-        message: result.hasDuplicates
-          ? `${result.successCount} contacts saved. ${result.duplicates.length} duplicates need your review.`
-          : `Import complete — ${result.successCount} of ${result.totalRows} contacts saved.`,
+        message: (result.hasDuplicates
+          ? `${result.successCount} contacts saved${unlinkedSuffix}. ${result.duplicates.length} duplicates need your review.`
+          : `Import complete — ${result.successCount} of ${result.totalRows} contacts saved${unlinkedSuffix}.`) + skippedSuffix,
         data: result,
       });
 

@@ -183,7 +183,8 @@ const importService = {
       try { fs.unlinkSync(filePath); } catch (_) {}
       return {
         importLogId: importLog._id, totalRows, successCount: 0,
-        failedCount: errorDetails.length, duplicates: [], contactsSaved: 0,
+        failedCount: errorDetails.length, skippedCount: errorDetails.length,
+        duplicates: [], contactsSaved: 0,
         errorDetails, status: "failed", missingIcpColumns,
       };
     }
@@ -476,9 +477,9 @@ const importService = {
     });
 
     console.log(
-      `Import complete: ${totalRows} rows processed, ${successCount} prospects created, ` +
-      `${contactsSaved} contacts saved, ${duplicateRows.length + contactDupCount} duplicates pending, ` +
-      `${allErrors.length} errors`
+      `Import complete: ${totalRows} rows processed, ${successCount} imported, ` +
+      `${errorDetails.length} skipped (missing required fields), ${insertErrors.length} insert errors, ` +
+      `${contactsSaved} contacts saved, ${duplicateRows.length + contactDupCount} duplicates pending`
     );
 
     // Return duplicates to frontend for user review
@@ -487,6 +488,7 @@ const importService = {
       totalRows,
       successCount,
       failedCount:    allErrors.length,
+      skippedCount:   errorDetails.length, // rows skipped for missing required fields (accountName/website)
       contactsSaved,
       duplicates:     duplicateRows,    // ← This is returned for the frontend to display
       hasDuplicates:  hasDuplicates,

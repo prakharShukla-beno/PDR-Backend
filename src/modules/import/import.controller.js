@@ -57,11 +57,15 @@ const importController = {
         companyId,
       });
 
+      const skippedSuffix = result.skippedCount > 0
+        ? ` ${result.skippedCount} skipped (missing required fields).`
+        : "";
+
       return res.status(200).json({
         success: true,
-        message: result.hasDuplicates
+        message: (result.hasDuplicates
           ? `${result.successCount} records saved. ${result.duplicates.length} duplicates need your review.`
-          : `Import complete — ${result.successCount} of ${result.totalRows} records saved.`,
+          : `Import complete — ${result.successCount} of ${result.totalRows} records saved.`) + skippedSuffix,
         data: result,
       });
 
