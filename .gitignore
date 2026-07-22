@@ -39,6 +39,10 @@ Thumbs.db
 *.swp
 *.swo
 
+# AI and GitHub folders
+.github/
+.ai/
+
 # Temporary files
 tmp/
 temp/

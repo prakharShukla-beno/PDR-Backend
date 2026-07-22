@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import duplicateRepository from "./duplicate.repository.js";
 import prospectRepository from "../prospect/prospect.repository.js";
 import contactRepository from "../contacts/contact.repository.js";
@@ -11,6 +12,212 @@ import { normEmail } from "../../common/utils/contactDedup.js";
 import { companyObjectId } from "../../common/utils/tenantScope.js";
 import Prospect from "../prospect/prospect.model.js";
 import Duplicate from "./duplicate.model.js";
+
+/**
+ * Process duplicates synchronously for small datasets (≤5000 records)
+ * Uses MongoDB aggregation pipeline for O(n) performance
+ */
+const processDuplicatesSync = async (cid, filter, importLogId) => {
+  // Step 1: Find duplicates using aggregation pipeline
+  const duplicatesByName = await Prospect.aggregate([
+    { $match: { ...filter, accountName: { $ne: null, $ne: "" } } },
+    { $project: { _id: 1, accountName: 1, accountNameLower: 1, website: 1, importLogId: 1 } },
+    { $group: {
+        _id: { $toLower: "$accountName" },
+        count: { $sum: 1 },
+        prospects: { $push: "$$ROOT" }
+    }},
+    { $match: { count: { $gt: 1 } } }
+  ]);
+
+  const duplicatesByWebsite = await Prospect.aggregate([
+    { $match: { ...filter, website: { $ne: null, $ne: "" } } },
+    { $project: { _id: 1, accountName: 1, website: 1, importLogId: 1 } },
+    { $group: {
+        _id: { $toLower: "$website" },
+        count: { $sum: 1 },
+        prospects: { $push: "$$ROOT" }
+    }},
+    { $match: { count: { $gt: 1 } } }
+  ]);
+
+  // Step 2: Process duplicates with bulk operations
+  const prospectUpdates = [];
+  const duplicateRecords = [];
+  const processedIds = new Set();
+
+  // Process name duplicates
+  for (const group of duplicatesByName) {
+    const [existing, ...incoming] = group.prospects;
+    for (const p of incoming) {
+      if (processedIds.has(p._id.toString())) continue;
+      processedIds.add(p._id.toString());
+      
+      prospectUpdates.push({
+        updateOne: { filter: { _id: p._id }, update: { $set: { isDuplicate: true } } }
+      });
+      duplicateRecords.push({
+        prospectId1: existing._id,
+        entityType: "Prospect",
+        newData: { accountName: p.accountName, website: p.website },
+        matchFields: ["accountName"],
+        source: "import",
+        importLogId: p.importLogId || importLogId || null,
+        status: "pending",
+        companyId: cid,
+      });
+    }
+  }
+
+  // Process website duplicates
+  for (const group of duplicatesByWebsite) {
+    const [existing, ...incoming] = group.prospects;
+    for (const p of incoming) {
+      if (processedIds.has(p._id.toString())) continue;
+      processedIds.add(p._id.toString());
+      
+      prospectUpdates.push({
+        updateOne: { filter: { _id: p._id }, update: { $set: { isDuplicate: true } } }
+      });
+      duplicateRecords.push({
+        prospectId1: existing._id,
+        entityType: "Prospect",
+        newData: { accountName: p.accountName, website: p.website },
+        matchFields: ["website"],
+        source: "import",
+        importLogId: p.importLogId || importLogId || null,
+        status: "pending",
+        companyId: cid,
+      });
+    }
+  }
+
+  // Step 3: Execute bulk operations
+  if (prospectUpdates.length > 0) {
+    await Prospect.bulkWrite(prospectUpdates, { ordered: false });
+  }
+  if (duplicateRecords.length > 0) {
+    await Duplicate.insertMany(duplicateRecords, { ordered: false });
+  }
+
+  return {
+    checked: await Prospect.countDocuments(filter),
+    duplicateCount: duplicateRecords.length,
+  };
+};
+
+/**
+ * Process duplicates asynchronously for large datasets (5000+ records)
+ * Uses cursor-based streaming and batch processing
+ */
+const processDuplicatesAsync = async (cid, filter, importLogId) => {
+  console.log(`[DuplicateCheck] Starting async processing for company ${cid}`);
+
+  try {
+    // Reset isDuplicate flag first
+    await Prospect.updateMany(
+      { ...filter, isDuplicate: true },
+      { $set: { isDuplicate: false } }
+    );
+
+    // Process in batches using aggregation
+    const BATCH_SIZE = 2000;
+    let processedCount = 0;
+
+    // Find all duplicates using aggregation
+    const duplicatesByName = await Prospect.aggregate([
+      { $match: { ...filter, accountName: { $exists: true, $ne: null, $ne: "" } } },
+      { $project: { _id: 1, accountName: 1, accountNameLower: 1, website: 1, importLogId: 1 } },
+      { $group: {
+          _id: { $toLower: "$accountName" },
+          count: { $sum: 1 },
+          prospects: { $push: "$$ROOT" }
+      }},
+      { $match: { count: { $gt: 1 } } }
+    ]);
+
+    const duplicatesByWebsite = await Prospect.aggregate([
+      { $match: { ...filter, website: { $exists: true, $ne: null, $ne: "" } } },
+      { $project: { _id: 1, accountName: 1, website: 1, importLogId: 1 } },
+      { $group: {
+          _id: { $toLower: "$website" },
+          count: { $sum: 1 },
+          prospects: { $push: "$$ROOT" }
+      }},
+      { $match: { count: { $gt: 1 } } }
+    ]);
+
+    const prospectUpdates = [];
+    const duplicateRecords = [];
+    const processedIds = new Set();
+
+    // Process name duplicates
+    for (const group of duplicatesByName) {
+      const [existing, ...incoming] = group.prospects;
+      for (const p of incoming) {
+        if (processedIds.has(p._id.toString())) continue;
+        processedIds.add(p._id.toString());
+        
+        prospectUpdates.push({
+          updateOne: { filter: { _id: p._id }, update: { $set: { isDuplicate: true } } }
+        });
+        duplicateRecords.push({
+          prospectId1: existing._id,
+          entityType: "Prospect",
+          newData: { accountName: p.accountName, website: p.website },
+          matchFields: ["accountName"],
+          source: "import",
+          importLogId: p.importLogId || importLogId || null,
+          status: "pending",
+          companyId: cid,
+        });
+      }
+    }
+
+    // Process website duplicates
+    for (const group of duplicatesByWebsite) {
+      const [existing, ...incoming] = group.prospects;
+      for (const p of incoming) {
+        if (processedIds.has(p._id.toString())) continue;
+        processedIds.add(p._id.toString());
+        
+        prospectUpdates.push({
+          updateOne: { filter: { _id: p._id }, update: { $set: { isDuplicate: true } } }
+        });
+        duplicateRecords.push({
+          prospectId1: existing._id,
+          entityType: "Prospect",
+          newData: { accountName: p.accountName, website: p.website },
+          matchFields: ["website"],
+          source: "import",
+          importLogId: p.importLogId || importLogId || null,
+          status: "pending",
+          companyId: cid,
+        });
+      }
+    }
+
+    // Write in batches
+    for (let i = 0; i < prospectUpdates.length; i += BATCH_SIZE) {
+      const batchUpdates = prospectUpdates.slice(i, i + BATCH_SIZE);
+      const batchRecords = duplicateRecords.slice(i, i + BATCH_SIZE);
+      
+      if (batchUpdates.length > 0) {
+        await Prospect.bulkWrite(batchUpdates, { ordered: false });
+      }
+      if (batchRecords.length > 0) {
+        await Duplicate.insertMany(batchRecords, { ordered: false });
+      }
+      processedCount += batchUpdates.length;
+      console.log(`[DuplicateCheck] Processed ${processedCount}/${prospectUpdates.length} duplicates`);
+    }
+
+    console.log(`[DuplicateCheck] Completed. Total duplicates: ${duplicateRecords.length}`);
+  } catch (err) {
+    console.error("[DuplicateCheck] Error:", err.message);
+    throw err;
+  }
+};
 
 const repairOrphanedDuplicates = async (companyId) => {
   const cid = companyObjectId(companyId);
@@ -396,89 +603,50 @@ const duplicateService = {
     return results;
   },
 
+  /**
+   * Check duplicates using MongoDB aggregation pipeline for O(n) performance.
+   * Processes in background to avoid HTTP timeout on large datasets (100k+).
+   */
   checkDuplicates: async (companyId, importLogId = null) => {
     const cid = companyObjectId(companyId);
     const filter = { companyId: cid };
-    if (importLogId) filter.importLogId = importLogId;
+    if (importLogId) filter.importLogId = new mongoose.Types.ObjectId(importLogId);
 
-    const prospects = await Prospect.find(filter)
-      .select("_id accountName website importLogId")
-      .lean();
+    // Get total count first (fast)
+    const totalCount = await Prospect.countDocuments(filter);
 
-    let duplicateCount = 0;
-    const BATCH = 500;
-
-    for (let i = 0; i < prospects.length; i += BATCH) {
-      const batch = prospects.slice(i, i + BATCH);
-      const names = batch.map((p) => p.accountName).filter(Boolean);
-      const websites = batch.map((p) => p.website).filter(Boolean);
-      const batchIds = batch.map((p) => p._id);
-
-      const matches = await Prospect.find({
-        companyId: cid,
-        _id: { $nin: batchIds },
-        $or: [
-          ...(names.length ? [{ accountName: { $in: names } }] : []),
-          ...(websites.length ? [{ website: { $in: websites } }] : []),
-        ],
-      })
-        .select("_id accountName website")
-        .lean();
-
-      const matchByName = new Map();
-      const matchByWebsite = new Map();
-      for (const m of matches) {
-        if (m.accountName) {
-          matchByName.set(m.accountName.toLowerCase(), m);
-        }
-        if (m.website) {
-          matchByWebsite.set(m.website.toLowerCase(), m);
-        }
-      }
-
-      for (const p of batch) {
-        const nameKey = p.accountName?.toLowerCase();
-        const siteKey = p.website?.toLowerCase();
-        const nameMatch = nameKey ? matchByName.get(nameKey) : null;
-        const websiteMatch = siteKey ? matchByWebsite.get(siteKey) : null;
-        const existing = nameMatch || websiteMatch;
-
-        if (!existing) continue;
-
-        const matchFields = [
-          nameMatch && "accountName",
-          websiteMatch && "website",
-        ].filter(Boolean);
-
-        duplicateCount++;
-
-        await Prospect.findByIdAndUpdate(p._id, {
-          isDuplicate: true,
-        });
-
-        try {
-          await duplicateRepository.create({
-            prospectId1: existing._id,
-            entityType: "Prospect",
-            newData: {
-              accountName: p.accountName,
-              website: p.website,
-            },
-            matchFields,
-            source: "import",
-            importLogId: p.importLogId || importLogId || null,
-            status: "pending",
-            companyId: cid,
-          });
-        } catch {
-          // skip duplicate-of-duplicate record conflicts
-        }
-      }
+    // If small dataset, process synchronously
+    if (totalCount <= 5000) {
+      return await processDuplicatesSync(cid, filter, importLogId);
     }
 
+    // For large datasets: start background processing and return immediately
+    processDuplicatesAsync(cid, filter, importLogId).catch((err) => {
+      console.error("[DuplicateCheck] Background processing failed:", err.message);
+    });
+
     return {
-      checked: prospects.length,
-      duplicateCount,
+      checked: totalCount,
+      duplicateCount: 0,
+      status: "processing",
+      message: `Duplicate check started in background for ${totalCount} prospects. Refresh page to see results.`,
+    };
+  },
+
+  /**
+   * Get duplicate check status (for polling)
+   */
+  getDuplicateCheckStatus: async (companyId, importLogId = null) => {
+    const cid = companyObjectId(companyId);
+    const filter = { companyId: cid, entityType: "Prospect", status: "pending" };
+    if (importLogId) filter.importLogId = new mongoose.Types.ObjectId(importLogId);
+
+    const pendingCount = await Duplicate.countDocuments(filter);
+    const totalProspects = await Prospect.countDocuments({ companyId: cid });
+
+    return {
+      pendingDuplicates: pendingCount,
+      totalProspects,
     };
   },
 };
