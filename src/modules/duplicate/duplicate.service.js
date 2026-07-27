@@ -20,7 +20,7 @@ import Duplicate from "./duplicate.model.js";
 const processDuplicatesSync = async (cid, filter, importLogId) => {
   // Step 1: Find duplicates using aggregation pipeline
   const duplicatesByName = await Prospect.aggregate([
-    { $match: { ...filter, accountName: { $ne: null, $ne: "" } } },
+    { $match: { ...filter, accountName: { $exists: true, $nin: [null, ""] } } },
     { $project: { _id: 1, accountName: 1, accountNameLower: 1, website: 1, importLogId: 1 } },
     { $group: {
         _id: { $toLower: "$accountName" },
@@ -31,7 +31,7 @@ const processDuplicatesSync = async (cid, filter, importLogId) => {
   ]);
 
   const duplicatesByWebsite = await Prospect.aggregate([
-    { $match: { ...filter, website: { $ne: null, $ne: "" } } },
+    { $match: { ...filter, website: { $exists: true, $nin: [null, ""] } } },
     { $project: { _id: 1, accountName: 1, website: 1, importLogId: 1 } },
     { $group: {
         _id: { $toLower: "$website" },
@@ -98,6 +98,17 @@ const processDuplicatesSync = async (cid, filter, importLogId) => {
   }
   if (duplicateRecords.length > 0) {
     await Duplicate.insertMany(duplicateRecords, { ordered: false });
+    
+    // Step 4: Delete duplicate prospects from collection (move to duplicates page)
+    const duplicateProspectIds = Array.from(processedIds).map(
+      id => new mongoose.Types.ObjectId(id)
+    );
+    
+    const deleteResult = await Prospect.deleteMany({
+      _id: { $in: duplicateProspectIds }
+    });
+    
+    console.log(`[DuplicateCheck] Deleted ${deleteResult.deletedCount} duplicate prospects from collection`);
   }
 
   return {
@@ -126,7 +137,7 @@ const processDuplicatesAsync = async (cid, filter, importLogId) => {
 
     // Find all duplicates using aggregation
     const duplicatesByName = await Prospect.aggregate([
-      { $match: { ...filter, accountName: { $exists: true, $ne: null, $ne: "" } } },
+      { $match: { ...filter, accountName: { $exists: true, $nin: [null, ""] } } },
       { $project: { _id: 1, accountName: 1, accountNameLower: 1, website: 1, importLogId: 1 } },
       { $group: {
           _id: { $toLower: "$accountName" },
@@ -137,7 +148,7 @@ const processDuplicatesAsync = async (cid, filter, importLogId) => {
     ]);
 
     const duplicatesByWebsite = await Prospect.aggregate([
-      { $match: { ...filter, website: { $exists: true, $ne: null, $ne: "" } } },
+      { $match: { ...filter, website: { $exists: true, $nin: [null, ""] } } },
       { $project: { _id: 1, accountName: 1, website: 1, importLogId: 1 } },
       { $group: {
           _id: { $toLower: "$website" },
@@ -210,6 +221,19 @@ const processDuplicatesAsync = async (cid, filter, importLogId) => {
       }
       processedCount += batchUpdates.length;
       console.log(`[DuplicateCheck] Processed ${processedCount}/${prospectUpdates.length} duplicates`);
+    }
+
+    // Delete all duplicate prospects from collection after processing
+    if (processedIds.size > 0) {
+      const duplicateProspectIds = Array.from(processedIds).map(
+        id => new mongoose.Types.ObjectId(id)
+      );
+      
+      const deleteResult = await Prospect.deleteMany({
+        _id: { $in: duplicateProspectIds }
+      });
+      
+      console.log(`[DuplicateCheck] Deleted ${deleteResult.deletedCount} duplicate prospects from collection`);
     }
 
     console.log(`[DuplicateCheck] Completed. Total duplicates: ${duplicateRecords.length}`);

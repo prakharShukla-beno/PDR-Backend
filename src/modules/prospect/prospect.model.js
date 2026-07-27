@@ -329,5 +329,26 @@ prospectSchema.index({ companyId: 1, icpTier: 1 });
 prospectSchema.index({ companyId: 1, icpSalesPriority: 1 });
 prospectSchema.index({ companyId: 1, icpFinalScore: 1 });
 
+// ─── Duplicate Prevention Indexes ─────────────────────────────────────────────
+// Prevent duplicate accounts within same company based on website and accountName
+prospectSchema.index(
+  { companyId: 1, website: 1 },
+  { 
+    unique: true, 
+    partialFilterExpression: { 
+      website: { $exists: true, $ne: null, $ne: "" } 
+    } 
+  }
+);
+prospectSchema.index(
+  { companyId: 1, accountNameLower: 1 },
+  { 
+    unique: true, 
+    partialFilterExpression: { 
+      accountNameLower: { $exists: true, $ne: null, $ne: "" } 
+    } 
+  }
+);
+
 const Prospect = mongoose.model("Prospect", prospectSchema);
 export default Prospect;
