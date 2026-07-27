@@ -192,7 +192,14 @@ const prospectService = {
     if (enriched === "false") filter.financialCapacity = null;
 
     if (businessModel)   filter.businessModel   = businessModel;
-    if (isDuplicate !== undefined) filter.isDuplicate = isDuplicate === "true";
+    
+    // Hide duplicates by default from Accounts view
+    // Duplicates are shown on /api/duplicates page for review
+    if (isDuplicate === "true" || isDuplicate === true) {
+      filter.isDuplicate = true;  // Show ONLY duplicates (for debugging)
+    } else {
+      filter.isDuplicate = false;  // Default: hide duplicates from Accounts list
+    }
 
     const sort = { [sortBy]: sortOrder === "asc" ? 1 : -1 };
 
