@@ -60,9 +60,9 @@ const segmentController = {
   getAccounts: async (req, res, next) => {
     try {
       const companyId = getCompanyIdFromRequest(req);
-      const { page = 1, limit = 10 } = req.query;
+      const { page = 1, limit = 10, ...filterQuery } = req.query;
       const result = await segmentService.getStoredAccounts(
-        req.params.id, Number(page), Number(limit), companyId
+        req.params.id, Number(page), Number(limit), companyId, filterQuery
       );
       res.set("Cache-Control", "no-store, no-cache, must-revalidate");
       res.status(200).json({ success: true, data: result });
@@ -97,10 +97,37 @@ const segmentController = {
       if (!Array.isArray(accountIds) || accountIds.length === 0) {
         return res.status(400).json({ success: false, message: "accountIds array required" });
       }
-      const segment = await segmentService.addAccounts(req.params.id, accountIds);
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.addAccounts(
+        req.params.id,
+        accountIds,
+        companyId
+      );
       res.status(200).json({
         success: true,
         message: `${accountIds.length} account(s) added to segment`,
+        data: { matchCount: segment.matchCount },
+      });
+    } catch (error) { next(error); }
+  },
+
+  // POST /api/segments/:id/remove-accounts
+  // Selected account IDs ko segment se hatao — prospect DB se delete NAHI hoti
+  removeAccounts: async (req, res, next) => {
+    try {
+      const { accountIds } = req.body;
+      if (!Array.isArray(accountIds) || accountIds.length === 0) {
+        return res.status(400).json({ success: false, message: "accountIds array required" });
+      }
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.removeAccounts(
+        req.params.id,
+        accountIds,
+        companyId
+      );
+      res.status(200).json({
+        success: true,
+        message: `${accountIds.length} account(s) removed from segment`,
         data: { matchCount: segment.matchCount },
       });
     } catch (error) { next(error); }

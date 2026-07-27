@@ -67,7 +67,8 @@ const campaignController = {
   // Delete campaign
   delete: async (req, res, next) => {
     try {
-      const result = await campaignService.delete(req.params.id, req.user._id);
+      const companyId = getCompanyIdFromRequest(req);
+      const result = await campaignService.delete(req.params.id, req.user._id, companyId);
       res.status(200).json({ success: true, ...result });
     } catch (error) {
       next(error);
@@ -77,6 +78,7 @@ const campaignController = {
   // Add contacts to campaign (Apollo style)
   addContacts: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const contactIds = req.body?.contactIds;
       if (!contactIds || !Array.isArray(contactIds) || contactIds.length === 0) {
         return res.status(400).json({
@@ -85,7 +87,7 @@ const campaignController = {
         });
       }
       const campaign = await campaignService.addContacts(
-        req.params.id, contactIds, req.user._id
+        req.params.id, contactIds, req.user._id, companyId
       );
       res.status(200).json({
         success: true,
@@ -100,8 +102,9 @@ const campaignController = {
   // Remove single contact from campaign
   removeContact: async (req, res, next) => {
     try {
+      const companyId = getCompanyIdFromRequest(req);
       const result = await campaignService.removeContact(
-        req.params.id, req.params.contactId, req.user._id
+        req.params.id, req.params.contactId, req.user._id, companyId
       );
       res.status(200).json({ success: true, ...result });
     } catch (error) {

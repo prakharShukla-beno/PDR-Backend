@@ -53,9 +53,19 @@ const icpSchema = new mongoose.Schema(
     annualRevenues: {
       type: [String],
       enum: [
-       "Seed <$1M", "Early $1M-$10M", "Growth $10M-$50M",
-       "Scale $50M-$100M", "Mid-Market $100M-$500M", "Enterprise $500M-$1B",
-       "Mega $1B+", null,      
+        "Seed <$1M",
+        "Early $1M-$10M",
+        "Scale-Up $10M-$50M",
+        "Mid-Market $50M-$250M",
+        "Corporate $250M-$1B",
+        "Enterprise $1B+",
+        // Legacy aliases (existing DB / import data)
+        "Growth $10M-$50M",
+        "Scale $50M-$100M",
+        "Mid-Market $100M-$500M",
+        "Enterprise $500M-$1B",
+        "Mega $1B+",
+        null,
       ],
       default: [],
     },
@@ -116,15 +126,11 @@ const icpSchema = new mongoose.Schema(
       ref: "Company",
       default: null,
     },
-
-    // Company benchmark ICP — only one may be true (enforced in service layer)
-    isBenchmark: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
 icpSchema.index({ companyId: 1 });
-icpSchema.index({ companyId: 1, isBenchmark: 1 });
 
 const ICP = mongoose.model("ICP", icpSchema);
 export default ICP;

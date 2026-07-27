@@ -9,7 +9,10 @@
 export {
   SECTOR_TO_INDUSTRIES,
   expandSectors,
+  getMappedIndustriesForSector,
+  buildPrimaryIndustryFilter,
   getSectorForIndustry,
+  resolveToCommercialSector,
   isValidChildIndustry,
   normalizeIndustryValue,
   buildIndustryToSectorMap,

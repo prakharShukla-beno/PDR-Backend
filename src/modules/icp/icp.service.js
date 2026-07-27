@@ -1,12 +1,14 @@
 import icpRepository from "./icp.repository.js";
-import ICP from "./icp.model.js";
 import Prospect from "../prospect/prospect.model.js";
 import Contact from "../contacts/contact.model.js";
 import segmentRepository from "../segment/segment.repository.js";
 import { calculateIcpMatchScore } from "../../common/utils/icpScoring.js";
+import {
+  buildIcpScoreUpdate,
+  resolveTechFitScore,
+} from "../../common/utils/icpScoreHelpers.js";
 import { companyFilter, companyMatchStage } from "../../common/utils/tenantScope.js";
 
-// Region → Countries mapping (synced with ICP Builder Preferential Market tab)
 const REGION_COUNTRIES = {
   "North America (NA)": ["United States", "Canada", "Mexico"],
   "Europe": [
@@ -82,6 +84,21 @@ const hasNoTechStack = {
     { primaryTechStack: { $size: 0 } },
   ],
 };
+
+const pillarScore = (pillarBreakdown) => {
+  if (!pillarBreakdown || typeof pillarBreakdown !== "object") return null;
+  return Object.values(pillarBreakdown).reduce(
+    (sum, entry) => sum + (entry?.score ?? 0),
+    0
+  );
+};
+
+const toPillarBreakdown = (scoreResult) => ({
+  firmographic: { score: pillarScore(scoreResult.breakdown.firmographic) },
+  market:       { score: pillarScore(scoreResult.breakdown.market) },
+  tech:         { score: pillarScore(scoreResult.breakdown.tech) },
+  persona:      { score: pillarScore(scoreResult.breakdown.persona) },
+});
 
 /** Build MongoDB filter for ICP → prospect matching */
 const buildProspectMatchFilter = (profile) => {
@@ -257,7 +274,7 @@ const ALLOWED_ICP_FIELDS = [
   "commercialCategories", "targetRegionsInclude", "targetRegionsExclude",
   "targetRegionCountriesExclude", "targetCountriesInclude", "targetCountriesExclude",
   "techStackInclude", "techStackExclude", "techCategoriesInclude", "techCategoriesExclude",
-  "buyerPersona", "isActive", "isBenchmark",
+  "buyerPersona", "isActive",
 ];
 
 const normalizeBuyerPersona = (persona = {}) => ({
@@ -370,7 +387,11 @@ const icpService = {
 
     const [prospects, total] = await Promise.all([
       Prospect.find(filter)
-        .select("accountName website primaryIndustry country businessModel annualRevenue noOfEmployees primaryTechStack techFitScore salesPriority clvRanking intentSignal")
+        .select(
+          "accountName website primaryIndustry country businessModel annualRevenue " +
+          "noOfEmployees primaryTechStack techFitScore salesPriority clvRanking " +
+          "intentSignal technologyAlignment techFitScoreIcp"
+        )
         .sort({ techFitScore: -1 })
         .skip(skip)
         .limit(Number(limit)),
@@ -402,21 +423,121 @@ const icpService = {
 
     const enrichedProspects = await Promise.all(
       prospects.map(async (p) => {
+        const prospectObj = p.toObject();
         const scoreResult = await calculateIcpMatchScore(
-          p.toObject(),
+          prospectObj,
           profile,
           Contact
         );
+        const techFitScore = resolveTechFitScore(
+          prospectObj,
+          scoreResult.techFitScore
+        );
+        const scoreUpdate = buildIcpScoreUpdate({
+          icpMatchScore:  scoreResult.icpMatchScore,
+          techFitScore,
+          breakdown:      toPillarBreakdown(scoreResult),
+          intentSignal:   prospectObj.intentSignal,
+          benchmarkIcpId: profile._id,
+        });
+
+        console.log(
+          `ICP Match ${prospectObj.accountName}: ` +
+          `ICP=${scoreResult.icpMatchScore}, ` +
+          `TechFit=${techFitScore}(${scoreUpdate.techFitBand}), ` +
+          `Final=${scoreUpdate.icpFinalScore}, ` +
+          `alignment=${prospectObj.technologyAlignment ?? "none"}, ` +
+          `icpSection=${scoreResult.techFitScore ?? "none"}`
+        );
+
         return {
-          ...p.toObject(),
-          icpMatchScore: scoreResult.icpMatchScore,
-          icpScoreBreakdown: scoreResult.breakdown,
-          contactCount: countMap[p._id.toString()] || 0,
+          _id:                  prospectObj._id,
+          accountName:          prospectObj.accountName,
+          website:              prospectObj.website,
+          primaryIndustry:      prospectObj.primaryIndustry,
+          country:              prospectObj.country,
+          businessModel:        prospectObj.businessModel,
+          annualRevenue:        prospectObj.annualRevenue,
+          noOfEmployees:        prospectObj.noOfEmployees,
+          primaryTechStack:     prospectObj.primaryTechStack,
+          intentSignal:         prospectObj.intentSignal,
+          technologyAlignment:  prospectObj.technologyAlignment,
+          clvRanking:           prospectObj.clvRanking,
+          icpMatchScore:        scoreUpdate.icpMatchScore,
+          icpFinalScore:        scoreUpdate.icpFinalScore,
+          techFitScoreIcp:      scoreUpdate.techFitScoreIcp,
+          techFitBand:          scoreUpdate.techFitBand,
+          icpTier:              scoreUpdate.icpTier,
+          icpSalesPriority:     scoreUpdate.icpSalesPriority,
+          icpScoredAt:          scoreUpdate.icpScoredAt,
+          icpScoreBreakdown:    scoreResult.breakdown,
+          contactCount:         countMap[p._id.toString()] || 0,
         };
       })
     );
 
-    enrichedProspects.sort((a, b) => b.icpMatchScore - a.icpMatchScore);
+    enrichedProspects.sort(
+      (a, b) => (b.icpFinalScore ?? 0) - (a.icpFinalScore ?? 0)
+    );
+
+    const updateOps = enrichedProspects.map((prospect) => {
+      const flatBreakdown = {
+        firmographic: pillarScore(prospect.icpScoreBreakdown?.firmographic),
+        market:       pillarScore(prospect.icpScoreBreakdown?.market),
+        tech:         pillarScore(prospect.icpScoreBreakdown?.tech),
+        persona:      pillarScore(prospect.icpScoreBreakdown?.persona),
+      };
+
+      return {
+        updateOne: {
+          filter: { _id: prospect._id },
+          update: {
+            $set: {
+              icpMatchScore:     prospect.icpMatchScore,
+              icpFinalScore:     prospect.icpFinalScore,
+              techFitScoreIcp:   prospect.techFitScoreIcp,
+              techFitBand:       prospect.techFitBand,
+              icpTier:           prospect.icpTier,
+              icpSalesPriority:  prospect.icpSalesPriority,
+              salesPriority:     prospect.icpSalesPriority,
+              icpScoreBreakdown: flatBreakdown,
+              icpBenchmarkRef:   profile._id,
+              icpScoredAt:       prospect.icpScoredAt ?? new Date(),
+              icpScoreStale:     false,
+            },
+          },
+        },
+      };
+    });
+
+    if (updateOps.length > 0) {
+      await Prospect.bulkWrite(updateOps, { ordered: false });
+      console.log(
+        `ICP Match: saved scores for ${updateOps.length} prospects`
+      );
+    }
+
+    const responseProspects = enrichedProspects.map((prospect) => {
+      const updateOp = updateOps.find(
+        (op) => op.updateOne.filter._id.toString() === prospect._id.toString()
+      );
+      if (!updateOp) return prospect;
+
+      const saved = updateOp.updateOne.update.$set;
+      return {
+        ...prospect,
+        icpMatchScore:    saved.icpMatchScore,
+        icpFinalScore:    saved.icpFinalScore,
+        techFitScoreIcp:  saved.techFitScoreIcp,
+        techFitBand:      saved.techFitBand,
+        icpTier:          saved.icpTier,
+        icpSalesPriority: saved.icpSalesPriority,
+      };
+    });
+
+    responseProspects.sort(
+      (a, b) => (b.icpFinalScore ?? 0) - (a.icpFinalScore ?? 0)
+    );
 
     const totalProspectsInDb = await Prospect.countDocuments(companyFilter(companyId, {}));
     const matchRatio         = totalProspectsInDb > 0 ? total / totalProspectsInDb : 0;
@@ -429,9 +550,8 @@ const icpService = {
       icpProfile: {
         id: profile._id,
         name: profile.name,
-        isBenchmark: profile.isBenchmark || false,
       },
-      prospects:  enrichedProspects,
+      prospects:  responseProspects,
       diagnosis,
       pagination: {
         total,
@@ -440,23 +560,6 @@ const icpService = {
         totalPages: Math.ceil(total / Number(limit)),
       },
     };
-  },
-
-  setBenchmark: async (id, companyId) => {
-    await ICP.updateMany({ companyId }, { isBenchmark: false });
-
-    const profile = await icpRepository.update(id, { isBenchmark: true }, companyId);
-    if (!profile) {
-      const error = new Error("ICP profile not found");
-      error.statusCode = 404;
-      throw error;
-    }
-    return profile;
-  },
-
-  getBenchmark: async (companyId) => {
-    return await ICP.findOne({ isBenchmark: true, companyId })
-      .populate("createdBy", "name email");
   },
 
   // ── Create segment from ICP matching prospects (one-click) ────────────────
@@ -535,7 +638,7 @@ const icpService = {
       throw error;
     }
 
-    const contactFilter = { companyId, isLinked: true };
+    const contactFilter = companyFilter(companyId, { isLinked: true });
 
     contactFilter.standardizedRoles = {
       $in: designations.map((d) => new RegExp(escapeRegex(d), "i")),

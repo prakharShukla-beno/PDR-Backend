@@ -1,17 +1,74 @@
 import prospectRepository from "./prospect.repository.js";
+import Prospect from "./prospect.model.js";
 import duplicateRepository from "../duplicate/duplicate.repository.js";
 import Contact from "../contacts/contact.model.js";
 import { calculateScore }   from "../../common/utils/scoring.js";
 import { companyFilter } from "../../common/utils/tenantScope.js";
+import { buildPrimaryIndustryFilter } from "../../common/utils/industryMapper.js";
 import pkg from "xlsx";
 const { utils, write } = pkg;
 
+const toArray = (val) => {
+  if (val == null || val === "") return [];
+
+  if (Array.isArray(val)) {
+    return val.flatMap((item) => toArray(item)).filter(Boolean);
+  }
+
+  if (typeof val === "object") {
+    const values = Object.values(val).flatMap((item) => toArray(item)).filter(Boolean);
+    if (values.length) return values;
+  }
+
+  if (typeof val === "string") {
+    if (val.includes(",")) {
+      return val.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+    return [val].filter(Boolean);
+  }
+
+  return [val].filter(Boolean);
+};
+
 /** Map `industry` or `primaryIndustry` query param to a MongoDB primaryIndustry filter */
-const buildIndustryFilter = (industry, primaryIndustry) => {
+const buildIndustryFilter = (industry, primaryIndustry, industries) => {
+  const fromList = toArray(industries);
+  if (fromList.length > 0) {
+    return buildPrimaryIndustryFilter(fromList, []);
+  }
   const raw = industry ?? primaryIndustry;
   if (!raw) return null;
-  const values = Array.isArray(raw) ? raw : [raw];
-  return values.length === 1 ? values[0] : { $in: values };
+  const values = toArray(raw);
+  return buildPrimaryIndustryFilter(values, []);
+};
+
+const applyTechStackInclude = (filter, tools) => {
+  const list = toArray(tools);
+  if (!list.length) return;
+  const clause = {
+    $or: list.flatMap((tool) => [
+      { primaryTechStack: tool },
+      { secondaryTechStack: tool },
+      { tertiaryTechStack: tool },
+    ]),
+  };
+  filter.$and = filter.$and || [];
+  filter.$and.push(clause);
+};
+
+const applyTechStackExclude = (filter, tools) => {
+  const list = toArray(tools);
+  if (!list.length) return;
+  filter.$and = filter.$and || [];
+  filter.$and.push({
+    $nor: list.map((tool) => ({
+      $or: [
+        { primaryTechStack: tool },
+        { secondaryTechStack: tool },
+        { tertiaryTechStack: tool },
+      ],
+    })),
+  });
 };
 
 const prospectService = {
@@ -53,28 +110,87 @@ const prospectService = {
   getAll: async (companyId, query) => {
     const {
       page = 1, limit = 10, search,
-      industry, primaryIndustry, country, salesPriority,
-      isDuplicate, clvRanking, businessModel,
+      industry, primaryIndustry, industries,
+      country, countries,
+      salesPriority, salesPriorities,
+      isDuplicate, clvRanking, clvRankings,
+      businessModel,
+      employeeRanges, annualRevenues,
+      techStackInclude, techStackExclude,
+      techFitScores,
+      finalScoreMin, finalScoreMax,
+      enriched,
+      ids,
       sortBy = "createdAt", sortOrder = "desc",
     } = query;
 
     const filter = companyFilter(companyId, {});
 
+    const idList = toArray(ids);
+    if (idList.length) filter._id = { $in: idList };
+
     if (search) {
       filter.$or = [
         { accountName:       { $regex: search, $options: "i" } },
         { website:           { $regex: search, $options: "i" } },
-        { country:           { $regex: search, $options: "i" } },
-        { "contacts.email":  { $regex: search, $options: "i" } },
-        { "contacts.name":   { $regex: search, $options: "i" } },
+        { primaryIndustry:   { $regex: search, $options: "i" } },
       ];
     }
 
-    const industryFilter = buildIndustryFilter(industry, primaryIndustry);
-    if (industryFilter) filter.primaryIndustry = industryFilter;
-    if (country)         filter.country         = { $regex: country, $options: "i" };
-    if (salesPriority)   filter.salesPriority   = salesPriority;
-    if (clvRanking)      filter.clvRanking      = clvRanking;
+    const industryFilter = buildIndustryFilter(industry, primaryIndustry, industries);
+    if (industryFilter) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(industryFilter);
+    }
+
+    const countryList = toArray(countries);
+    if (countryList.length) {
+      filter.country = countryList.length === 1 ? countryList[0] : { $in: countryList };
+    } else if (country) {
+      filter.country = { $regex: country, $options: "i" };
+    }
+
+    const salesList = toArray(salesPriorities);
+    if (salesList.length) {
+      filter.salesPriority = salesList.length === 1 ? salesList[0] : { $in: salesList };
+    } else if (salesPriority) {
+      filter.salesPriority = salesPriority;
+    }
+
+    const clvList = toArray(clvRankings);
+    if (clvList.length) {
+      filter.clvRanking = clvList.length === 1 ? clvList[0] : { $in: clvList };
+    } else if (clvRanking) {
+      filter.clvRanking = clvRanking;
+    }
+
+    const employeeList = toArray(employeeRanges);
+    if (employeeList.length) {
+      filter.noOfEmployees = employeeList.length === 1 ? employeeList[0] : { $in: employeeList };
+    }
+
+    const revenueList = toArray(annualRevenues);
+    if (revenueList.length) {
+      filter.annualRevenue = revenueList.length === 1 ? revenueList[0] : { $in: revenueList };
+    }
+
+    applyTechStackInclude(filter, techStackInclude);
+    applyTechStackExclude(filter, techStackExclude);
+
+    const techFitList = toArray(techFitScores).map(Number).filter((n) => !Number.isNaN(n));
+    if (techFitList.length) {
+      filter.techFitScore = techFitList.length === 1 ? techFitList[0] : { $in: techFitList };
+    }
+
+    if (finalScoreMin || finalScoreMax) {
+      filter.finalScore = {};
+      if (finalScoreMin) filter.finalScore.$gte = Number(finalScoreMin);
+      if (finalScoreMax) filter.finalScore.$lte = Number(finalScoreMax);
+    }
+
+    if (enriched === "true")  filter.financialCapacity = { $ne: null };
+    if (enriched === "false") filter.financialCapacity = null;
+
     if (businessModel)   filter.businessModel   = businessModel;
     if (isDuplicate !== undefined) filter.isDuplicate = isDuplicate === "true";
 
@@ -238,6 +354,23 @@ const prospectService = {
     return results;
   },
 
+  /** Backward-compat: mirror icpSalesPriority onto legacy salesPriority field */
+  syncSalesPriorityFromIcp: async (companyId) => {
+    const baseFilter = companyFilter(companyId, {});
+
+    for (const priority of ["P1", "P2", "P3", "P4"]) {
+      await Prospect.updateMany(
+        { ...baseFilter, icpSalesPriority: priority },
+        { $set: { salesPriority: priority } }
+      );
+    }
+
+    await Prospect.updateMany(
+      { ...baseFilter, icpSalesPriority: null },
+      { $set: { salesPriority: null } }
+    );
+  },
+
   // ── Suggest POC via Gemini AI ─────────────────────────────────────────────
   // Scenario 1: contacts exist → pick best match based on ICP buyer persona
   // Scenario 2: no contacts   → suggest target role + LinkedIn search tip
@@ -362,7 +495,10 @@ ${contacts.length > 0
       ];
     }
     const industryFilter = buildIndustryFilter(industry, primaryIndustry);
-    if (industryFilter)  filter.primaryIndustry = industryFilter;
+    if (industryFilter) {
+      filter.$and = filter.$and || [];
+      filter.$and.push(industryFilter);
+    }
     if (country)         filter.country         = { $regex: country, $options: "i" };
     if (salesPriority)   filter.salesPriority   = salesPriority;
     if (clvRanking)      filter.clvRanking      = clvRanking;

@@ -7,11 +7,12 @@ const duplicateController = {
   getAll: async (req, res, next) => {
     try {
       const companyId = getCompanyIdFromRequest(req);
-      const { page, limit, status } = req.query;
-      const result = await duplicateService.getAll({ page, limit, status }, companyId);
+      const { page, limit, status, entityType } = req.query;
+      const result = await duplicateService.getAll({ page, limit, status, entityType }, companyId);
       res.status(200).json({
         success: true,
         data:       result.duplicates,
+        counts:     result.counts,
         pagination: result.pagination,
       });
     } catch (error) {
@@ -69,6 +70,27 @@ const duplicateController = {
       const result = await duplicateService.deleteDuplicate(req.params.id, req.user._id);
       res.status(200).json({ success: true, message: "Duplicate record deleted", data: result });
     } catch (error) { next(error); }
+  },
+
+  // POST /api/duplicates/check — scan prospects for duplicates
+  checkDuplicates: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const { importLogId } = req.body || {};
+
+      const result = await duplicateService.checkDuplicates(
+        companyId,
+        importLogId || null
+      );
+
+      res.status(200).json({
+        success: true,
+        message: `Duplicate check complete — ${result.duplicateCount} found`,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
   },
 
   // POST /api/duplicates/bulk — bulk action on multiple IDs

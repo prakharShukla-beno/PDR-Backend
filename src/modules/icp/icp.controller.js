@@ -1,5 +1,6 @@
 import { validationResult } from "express-validator";
 import icpService from "./icp.service.js";
+import segmentService from "../segment/segment.service.js";
 import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 
 const icpController = {
@@ -143,6 +144,34 @@ const icpController = {
     }
   },
 
+  // POST /api/icp/:id/add-to-segment — add all ICP matches to an existing segment
+  addToSegment: async (req, res, next) => {
+    try {
+      const { segmentId } = req.body;
+      if (!segmentId) {
+        return res.status(400).json({
+          success: false,
+          message: "segmentId is required",
+        });
+      }
+
+      const companyId = getCompanyIdFromRequest(req);
+      const segment = await segmentService.addIcpMatchesToSegment(
+        segmentId,
+        req.params.id,
+        companyId
+      );
+
+      res.status(200).json({
+        success: true,
+        message: `Matching accounts added to segment (${segment.matchCount} total)`,
+        data: segment,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // GET /api/icp/:id/match-prospects — match prospects using ICP criteria
   matchProspects: async (req, res, next) => {
     try {
@@ -156,38 +185,6 @@ const icpController = {
         icpProfile: result.icpProfile,
         pagination: result.pagination,
         diagnosis:  result.diagnosis || {},
-      });
-    } catch (error) {
-      next(error);
-    }
-  },
-
-  // GET /api/icp/benchmark — get company benchmark ICP
-  getBenchmark: async (req, res, next) => {
-    try {
-      const companyId = getCompanyIdFromRequest(req);
-      const profile = await icpService.getBenchmark(companyId);
-      if (!profile) {
-        return res.status(404).json({
-          success: false,
-          message: "No benchmark ICP set",
-        });
-      }
-      res.status(200).json({ success: true, data: profile });
-    } catch (error) {
-      next(error);
-    }
-  },
-
-  // PUT /api/icp/:id/set-benchmark — mark ICP as company benchmark
-  setBenchmark: async (req, res, next) => {
-    try {
-      const companyId = getCompanyIdFromRequest(req);
-      const profile = await icpService.setBenchmark(req.params.id, companyId);
-      res.status(200).json({
-        success: true,
-        message: "ICP set as benchmark successfully",
-        data: profile,
       });
     } catch (error) {
       next(error);

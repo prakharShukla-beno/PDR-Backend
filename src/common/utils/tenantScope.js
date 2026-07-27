@@ -11,7 +11,7 @@ export function requireCompanyId(companyId) {
 }
 
 export function companyFilter(companyId, filter = {}) {
-  return { ...filter, companyId: requireCompanyId(companyId) };
+  return { ...filter, companyId: companyObjectId(companyId) };
 }
 
 export function companyObjectId(companyId) {

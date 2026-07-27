@@ -63,6 +63,12 @@ const duplicateSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      index: true,
+      default: null,
+    },
   },
   {
     timestamps: true,

@@ -138,6 +138,13 @@ const scoreMarket = (prospect, icp) => {
 
 // ── TECH STACK SCORE (25 pts) ────────────────────────────────────────────────
 
+const withTechFitNormalized = (score, breakdown) => ({
+  score,
+  techFitScore: Math.round((score / 25) * 100),
+  breakdown,
+  maxScore: 25,
+});
+
 const scoreTechStack = (prospect, icp) => {
   let score = 0;
   const breakdown = {};
@@ -149,7 +156,7 @@ const scoreTechStack = (prospect, icp) => {
   if (icpTechInclude.length === 0 && icpTechExclude.length === 0) {
     score += 25;
     breakdown.tech = { score: 25, reason: "No tech filter — full points" };
-    return { score, breakdown, maxScore: 25 };
+    return withTechFitNormalized(score, breakdown);
   }
 
   const usesExcluded = icpTechExclude.some(t =>
@@ -157,13 +164,13 @@ const scoreTechStack = (prospect, icp) => {
   );
   if (usesExcluded) {
     breakdown.tech = { score: 0, reason: "Uses excluded technology" };
-    return { score: 0, breakdown, maxScore: 25 };
+    return withTechFitNormalized(0, breakdown);
   }
 
   if (icpTechInclude.length === 0) {
     score += 25;
     breakdown.tech = { score: 25, reason: "Passes exclusion check" };
-    return { score, breakdown, maxScore: 25 };
+    return withTechFitNormalized(score, breakdown);
   }
 
   const matchedTools = icpTechInclude.filter(t =>
@@ -192,7 +199,7 @@ const scoreTechStack = (prospect, icp) => {
     };
   }
 
-  return { score, breakdown, maxScore: 25 };
+  return withTechFitNormalized(score, breakdown);
 };
 
 // ── BUYER PERSONA SCORE (10 pts) ─────────────────────────────────────────────
@@ -217,6 +224,9 @@ const scoreBuyerPersona = async (prospect, icp, Contact) => {
   }
 
   const contactFilter = { accountId: prospect._id };
+  if (prospect.companyId) {
+    contactFilter.companyId = prospect.companyId;
+  }
   if (designations.length > 0) {
     contactFilter.standardizedRoles = {
       $in: designations.map(d => new RegExp(d, "i")),
@@ -252,6 +262,7 @@ export const calculateIcpMatchScore = async (prospect, icp, Contact) => {
 
   return {
     icpMatchScore: totalScore,
+    techFitScore:  tech.techFitScore,
     maxScore: 100,
     breakdown: {
       firmographic: firmographic.breakdown,

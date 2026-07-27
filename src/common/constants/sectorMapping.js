@@ -1,3 +1,25 @@
+import { INDUSTRIES, SECTOR_TAXONOMY, getIndsInSector, getSubsInSector } from "./taxonomy.js";
+
+const normalizeKey = (value) =>
+  String(value)
+    .toLowerCase()
+    .trim()
+    .replace(/[.,/]+/g, " ")
+    .replace(/\s+/g, " ");
+
+let subSectorToSectorMap = null;
+
+const buildSubSectorToSectorMap = () => {
+  if (subSectorToSectorMap) return subSectorToSectorMap;
+  subSectorToSectorMap = {};
+  for (const [sector, subs] of Object.entries(SECTOR_TAXONOMY)) {
+    for (const sub of Object.keys(subs)) {
+      subSectorToSectorMap[normalizeKey(sub)] = sector;
+    }
+  }
+  return subSectorToSectorMap;
+};
+
 /**
  * SECTOR_TO_INDUSTRIES — Commercial Sector Parent→Child Mapping
  * 
@@ -88,11 +110,34 @@ export const buildIndustryToSectorMap = () => {
   const map = {};
   for (const [sector, industries] of Object.entries(SECTOR_TO_INDUSTRIES)) {
     for (const industry of industries) {
-      const key = industry.toLowerCase().trim();
+      const key = normalizeKey(industry);
       map[key] = sector;
     }
   }
   return map;
+};
+
+/** Known DB / import aliases for mapped industry labels */
+const INDUSTRY_ALIASES = {
+  "Social Security": ["Social Security (Financial Aspect)"],
+  "E-commerce": ["E-Commerce"],
+  "AI/ML": ["AI & ML"],
+  "Electricity/Thermal": ["Electricity, Thermal"],
+  "Hydro/Natural Gas": ["Hydro, Natural Gas"],
+};
+
+/**
+ * All values that should match when a commercial sector is selected in filters.
+ * Includes sector name, sub-sectors, mapped industries (ICP taxonomy), and legacy aliases.
+ */
+export const getMappedIndustriesForSector = (sector) => {
+  const taxonomy = getIndsInSector(sector);
+  const subs = getSubsInSector(sector);
+  const legacy = SECTOR_TO_INDUSTRIES[sector] || [];
+  const aliases = [...taxonomy, ...legacy].flatMap(
+    (v) => INDUSTRY_ALIASES[v] ?? []
+  );
+  return [...new Set([sector, ...subs, ...taxonomy, ...legacy, ...aliases])];
 };
 
 /**
@@ -111,16 +156,50 @@ export const expandSectors = (values) => {
   const expanded = [];
 
   arr.filter(Boolean).forEach((v) => {
-    if (SECTOR_TO_INDUSTRIES[v]) {
-      // It's a sector name — expand to all children
-      expanded.push(...SECTOR_TO_INDUSTRIES[v]);
+    if (SECTOR_TAXONOMY[v] || SECTOR_TO_INDUSTRIES[v]) {
+      expanded.push(...getMappedIndustriesForSector(v));
     } else {
-      // It's likely an industry value — pass through as-is
-      expanded.push(v);
+      expanded.push(v, ...(INDUSTRY_ALIASES[v] ?? []));
     }
   });
 
-  return [...new Set(expanded)]; // deduplicate
+  return [...new Set(expanded)];
+};
+
+const escapeRegex = (value) =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Case-insensitive industry filter for include / exclude lists.
+ * @param {string} field - Document field to match (primaryIndustry or accountIndustry)
+ */
+export const buildPrimaryIndustryFilter = (
+  includeValues = [],
+  excludeValues = [],
+  field = "primaryIndustry"
+) => {
+  const inc = expandSectors(includeValues);
+  const exc = expandSectors(excludeValues);
+  const clauses = [];
+
+  if (inc.length) {
+    clauses.push({
+      $or: inc.map((v) => ({
+        [field]: { $regex: `^${escapeRegex(v)}$`, $options: "i" },
+      })),
+    });
+  }
+
+  if (exc.length) {
+    clauses.push({
+      $nor: exc.map((v) => ({
+        [field]: { $regex: `^${escapeRegex(v)}$`, $options: "i" },
+      })),
+    });
+  }
+
+  if (!clauses.length) return null;
+  return clauses.length === 1 ? clauses[0] : { $and: clauses };
 };
 
 /**
@@ -132,8 +211,56 @@ export const expandSectors = (values) => {
 export const getSectorForIndustry = (industry) => {
   if (!industry) return null;
   const map = buildIndustryToSectorMap();
-  const key = String(industry).toLowerCase().trim();
+  const key = normalizeKey(industry);
   return map[key] || null;
+};
+
+/**
+ * Map any industry / sub-sector / sector label to one of the 11 commercial sectors.
+ */
+export const resolveToCommercialSector = (value) => {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  const key = normalizeKey(trimmed);
+
+  for (const sector of INDUSTRIES) {
+    if (normalizeKey(sector) === key) return sector;
+  }
+
+  const fromChild = getSectorForIndustry(trimmed);
+  if (fromChild) return fromChild;
+
+  const subMap = buildSubSectorToSectorMap();
+  if (subMap[key]) return subMap[key];
+
+  const industryMap = buildIndustryToSectorMap();
+  let bestSector = null;
+  let bestLen = 0;
+  for (const [indKey, sector] of Object.entries(industryMap)) {
+    if (key === indKey || key.includes(indKey) || indKey.includes(key)) {
+      const len = Math.min(indKey.length, key.length);
+      if (len >= 4 && len > bestLen) {
+        bestSector = sector;
+        bestLen = len;
+      }
+    }
+  }
+  if (bestSector) return bestSector;
+
+  for (const sector of INDUSTRIES) {
+    const sectorKey = normalizeKey(sector);
+    if (key.includes(sectorKey) || sectorKey.includes(key)) {
+      if (Math.min(sectorKey.length, key.length) >= 8) return sector;
+    }
+  }
+
+  for (const [subKey, sector] of Object.entries(subMap)) {
+    if (key.includes(subKey) || subKey.includes(key)) {
+      if (Math.min(subKey.length, key.length) >= 6) return sector;
+    }
+  }
+
+  return "Professional Services";
 };
 
 /**
@@ -145,7 +272,7 @@ export const getSectorForIndustry = (industry) => {
 export const isValidChildIndustry = (value) => {
   if (!value) return false;
   const map = buildIndustryToSectorMap();
-  const key = String(value).toLowerCase().trim();
+  const key = normalizeKey(value);
   return !!map[key];
 };
 

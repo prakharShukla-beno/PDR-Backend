@@ -49,10 +49,11 @@ const resolveFunctionalDomain = (department) => {
 export const hasContactPayload = (contact) =>
   !!(contact?.name || contact?.email || contact?.phone || contact?.designation);
 
-export const buildContactDocs = (row, prospect, importLogId, source = "account_import") => {
+export const buildContactDocs = (row, prospect, importLogId, source = "account_import", companyId = null) => {
   const contacts = row.contacts;
   if (!contacts?.length) return [];
 
+  const resolvedCompanyId = companyId ?? prospect.companyId ?? null;
   const accountFields = extractAccountFields(prospect);
   const docs = [];
 
@@ -63,7 +64,7 @@ export const buildContactDocs = (row, prospect, importLogId, source = "account_i
     const { functionalDomain, keyFocusAreas } = resolveFunctionalDomain(contact.department);
 
     docs.push({
-      companyId:         prospect.companyId || null,
+      companyId:         resolvedCompanyId,
       accountId:         prospect._id,
       accountName:       prospect.accountName || row.accountName,
       isLinked:          true,
@@ -88,14 +89,16 @@ export const buildContactDocs = (row, prospect, importLogId, source = "account_i
 };
 
 /** Persist parsed row contacts onto an existing prospect (skips duplicate emails) */
-export const saveContactsForProspect = async (Contact, row, prospect, importLogId) => {
-  const docs = buildContactDocs(row, prospect, importLogId);
+export const saveContactsForProspect = async (Contact, row, prospect, importLogId, companyId = null) => {
+  const resolvedCompanyId = companyId ?? prospect.companyId ?? null;
+  const docs = buildContactDocs(row, prospect, importLogId, "account_import", resolvedCompanyId);
   let saved = 0;
 
   for (const doc of docs) {
     if (doc.email) {
       const exists = await Contact.findOne({
         accountId: prospect._id,
+        companyId: resolvedCompanyId,
         email:     doc.email,
       }).select("_id").lean();
       if (exists) continue;

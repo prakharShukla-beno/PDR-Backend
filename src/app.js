@@ -14,7 +14,6 @@ import "./modules/contacts/contact.model.js";
 import "./modules/campaign/campaign.model.js";
 import "./modules/importLog/importLog.model.js";
 import "./modules/import/importJob.model.js";
-import "./modules/import/stagedRow.model.js";
 import "./modules/interaction/interaction.model.js";
 import "./modules/enrichment/enrichment.model.js";
 import "./modules/notification/notification.model.js";
@@ -34,16 +33,34 @@ app.set("query parser", (str) =>
   qs.parse(str, { allowDots: true, arrayLimit: 100 })
 );
 
-const corsOrigins = [
-  "https://pdr-frontend-five.vercel.app",
+const allowedOrigins = [
+  "https://benogroup.in",
+  "https://www.benogroup.in",
   "http://localhost:3000",
-];
-if (process.env.FRONTEND_URL) {
-  corsOrigins.push(process.env.FRONTEND_URL.replace(/\/+$/, ""));
-}
+  process.env.FRONTEND_URL?.replace(/\/+$/, ""),
+].filter(Boolean);
+
+// Vercel preview deployments for this project, e.g.:
+// https://pdr-frontend-git-feature-x-username.vercel.app
+// https://pdr-frontend-abc123-team.vercel.app
+const isVercelPreview = (origin) =>
+  /^https:\/\/pdr-frontend[a-z0-9-]*\.vercel\.app$/i.test(origin);
 
 app.use(helmet());
-app.use(cors({ origin: corsOrigins }));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true); // server-to-server, curl, etc.
+
+      if (allowedOrigins.includes(origin) || isVercelPreview(origin)) {
+        return callback(null, true);
+      }
+
+      callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  })
+);
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
