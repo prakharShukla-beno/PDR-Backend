@@ -137,6 +137,7 @@ const contactSchema = new mongoose.Schema(
     // ── System ───────────────────────────────────────────────────────────────
     isPrimary: { type: Boolean, default: false },
     isLinked:  { type: Boolean, default: false }, // whether the contact is linked to an account
+    isDuplicate: { type: Boolean, default: false }, // whether the contact is a duplicate
     source: {
       type: String,
       enum: ["excel", "csv", "manual", "account_import"],
@@ -197,6 +198,18 @@ contactSchema.index({ accountEmployees: 1 });
 contactSchema.index({ accountRevenue: 1 });
 contactSchema.index({ accountBusinessModel: 1 });
 contactSchema.index({ accountIntentSignal: 1 });
+
+// ─── Duplicate Prevention Indexes ─────────────────────────────────────────────
+// Unique compound indexes to prevent duplicates at database level
+// Uses partial filter expression to only enforce uniqueness on non-null/non-empty values
+contactSchema.index(
+  { companyId: 1, email: 1 },
+  { unique: true, partialFilterExpression: { email: { $exists: true, $nin: [null, ""] } } }
+);
+contactSchema.index(
+  { companyId: 1, primaryPhone: 1 },
+  { unique: true, partialFilterExpression: { primaryPhone: { $exists: true, $nin: [null, ""] } } }
+);
 
 // Text search index
 contactSchema.index({

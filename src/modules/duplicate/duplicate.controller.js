@@ -93,6 +93,31 @@ const duplicateController = {
     }
   },
 
+  // POST /api/duplicates/check-contacts — scan contacts for duplicates
+  checkContactDuplicates: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const { importLogId } = req.body || {};
+
+      console.log("[ContactDuplicateCheck] Starting:", { companyId, importLogId });
+
+      const result = await duplicateService.checkContactDuplicates(
+        companyId,
+        importLogId || null
+      );
+
+      console.log("[ContactDuplicateCheck] Completed:", result);
+
+      res.status(200).json({
+        success: true,
+        message: `Contact duplicate check complete — ${result.duplicateCount} found`,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // POST /api/duplicates/bulk — bulk action on multiple IDs
   bulkAction: async (req, res, next) => {
     try {

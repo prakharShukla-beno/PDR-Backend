@@ -8,6 +8,7 @@ router.use(authMiddleware);
 
 router.get("/",              editorPlus, duplicateController.getAll);
 router.post("/check",        editorPlus, duplicateController.checkDuplicates);
+router.post("/check-contacts", editorPlus, duplicateController.checkContactDuplicates);
 router.post("/bulk",         editorPlus, duplicateController.bulkAction);
 router.get("/:id",           editorPlus, duplicateController.getById);
 router.delete("/:id",        adminOnly,  duplicateController.deleteDuplicate);
