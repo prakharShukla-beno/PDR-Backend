@@ -117,7 +117,7 @@ export async function startImportWorker(jobId, filePath, companyId) {
         const { isValid, normalizedRow, reason } = validateAndNormalizeRow(
           rawRow,
           2,
-          { skipContacts: true }
+          { skipContacts: false }
         );
         if (!isValid) {
           errorCount++;

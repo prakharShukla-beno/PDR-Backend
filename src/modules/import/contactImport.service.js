@@ -5,19 +5,9 @@ import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
 import auditLogService from "../auditLog/auditLog.service.js";
 import Prospect from "../prospect/prospect.model.js";
-import duplicateRepository from "../duplicate/duplicate.repository.js";
 import {
   isEmpty,
   hasValue,
-  buildContactDedupIndexes,
-  findDbContactDuplicate,
-  createInFileDedupTracker,
-  checkInFileDuplicate,
-  registerInFileRow,
-  fetchExistingContactsForDedup,
-  normEmail,
-  normPhone,
-  nameAccountKey,
 } from "../../common/utils/contactDedup.js";
 
 const CHUNK_SIZE = 1000;
@@ -59,8 +49,10 @@ const contactImportService = {
 
   // ==========================================================================
   // CONTACT IMPORT — Step 1
-  // Save non-duplicates and return duplicates to the user for review
-  // Duplicate = email OR phone OR (firstName + lastName + accountName) match
+  // Save ALL valid rows (name + email required, checked in contactFileParser).
+  // No duplicate check here — that happens separately via the
+  // "Check Duplicates" button → POST /duplicates/check-contacts
+  // (same pattern as account import).
   // ==========================================================================
   processContactImport: async (filePath, { userId, companyId }) => {
 
@@ -101,7 +93,8 @@ const contactImportService = {
       }
     }
 
-    // Prepare all rows first so we can batch-fetch existing contacts for dedup
+    // Prepare all rows — accountName resolves to accountId when a matching
+    // account exists; otherwise the contact is inserted unlinked.
     const preparedRows = validRows.map((row) => {
       const nameKey       = row.accountName?.trim().toLowerCase();
       const prospect      = nameKey ? accountMap[nameKey] : null;
@@ -119,60 +112,17 @@ const contactImportService = {
       };
     });
 
-    const existingContacts = await fetchExistingContactsForDedup(Contact, preparedRows, companyId);
-    const dedupIndexes     = buildContactDedupIndexes(existingContacts);
-    const fileTracker      = createInFileDedupTracker();
-
-    const newRows           = [];
-    const duplicateRows     = [];
-    const deferredInFileDups = [];
-    const insertErrors      = [];
-
-    for (const preparedRow of preparedRows) {
-      const dbDup = findDbContactDuplicate(preparedRow, dedupIndexes);
-      if (dbDup) {
-        await duplicateRepository.create({
-          prospectId1: dbDup.existing._id,
-          entityType:  "Contact",
-          newData:     preparedRow,
-          matchFields: dbDup.matchFields,
-          source:      "import",
-          importLogId: importLog._id,
-          status:      "pending",
-          companyId,
-        });
-        duplicateRows.push({
-          newData:      preparedRow,
-          existingData: dbDup.existing,
-          matchFields:  dbDup.matchFields,
-        });
-        continue;
-      }
-
-      const inFileDup = checkInFileDuplicate(preparedRow, fileTracker);
-      if (inFileDup) {
-        deferredInFileDups.push({
-          preparedRow,
-          matchFields:  inFileDup.matchFields,
-          firstRowData: inFileDup.firstRow,
-        });
-        insertErrors.push(
-          `In-file duplicate (${inFileDup.matchFields.join(", ")}): ` +
-          `${preparedRow.email || preparedRow.primaryPhone || `${preparedRow.firstName} ${preparedRow.lastName}`.trim()}`
-        );
-        continue;
-      }
-
-      registerInFileRow(preparedRow, fileTracker);
-      newRows.push(preparedRow);
-    }
+    // No dedup check at import time — every valid row goes straight to insert.
+    const newRows       = preparedRows;
+    const duplicateRows = [];
+    const insertErrors  = [];
 
     // Account matching never rejects a row — unmatched/absent accountName just means
     // the contact is inserted with accountId: null, isLinked: false (unlinked).
     const unlinkedCount = newRows.filter((r) => !r.isLinked).length;
     const linkedCount   = newRows.length - unlinkedCount;
 
-    console.log(`📦 New: ${newRows.length} (${linkedCount} linked, ${unlinkedCount} unlinked) | DB Duplicates: ${duplicateRows.length} | In-file skipped: ${deferredInFileDups.length}`);
+    console.log(`📦 New: ${newRows.length} (${linkedCount} linked, ${unlinkedCount} unlinked)`);
 
     let successCount = 0;
 
@@ -185,60 +135,11 @@ const contactImportService = {
       await importLogRepository.update(importLog._id, { successCount });
     }
 
-    // Flag in-file duplicates for review once the first row is saved
-    if (deferredInFileDups.length > 0 && successCount > 0) {
-      const insertedContacts = await Contact.find({
-        importLogId: importLog._id,
-        companyId,
-      })
-        .select("_id email primaryPhone firstName lastName accountName")
-        .lean();
-
-      const insertedByEmail = {};
-      const insertedByPhone = {};
-      const insertedByNameAccount = {};
-      for (const c of insertedContacts) {
-        const email = normEmail(c.email);
-        if (email) insertedByEmail[email] = c;
-        const phone = normPhone(c.primaryPhone);
-        if (phone) insertedByPhone[phone] = c;
-        const nameKey = nameAccountKey(c);
-        if (nameKey) insertedByNameAccount[nameKey] = c;
-      }
-
-      for (const dup of deferredInFileDups) {
-        const first = dup.firstRowData;
-        const existing =
-          (normEmail(first.email) && insertedByEmail[normEmail(first.email)]) ||
-          (normPhone(first.primaryPhone) && insertedByPhone[normPhone(first.primaryPhone)]) ||
-          (nameAccountKey(first) && insertedByNameAccount[nameAccountKey(first)]);
-
-        if (existing) {
-          await duplicateRepository.create({
-            prospectId1: existing._id,
-            entityType:  "Contact",
-            newData:     dup.preparedRow,
-            matchFields: dup.matchFields,
-            source:      "import",
-            importLogId: importLog._id,
-            status:      "pending",
-            companyId,
-          });
-          duplicateRows.push({
-            newData:      dup.preparedRow,
-            existingData: existing,
-            matchFields:  dup.matchFields,
-          });
-        }
-      }
-    }
-
     const allErrors     = [...errorDetails, ...insertErrors];
-    const hasDuplicates = duplicateRows.length > 0;
+    const hasDuplicates = false;
     const finalStatus   =
-      successCount === 0 && !hasDuplicates ? "failed"  :
-      hasDuplicates                        ? "partial" :
-      successCount < newRows.length        ? "partial" :
+      successCount === 0                    ? "failed"  :
+      successCount < newRows.length         ? "partial" :
       "completed";
 
     await importLogRepository.update(importLog._id, {
@@ -255,12 +156,12 @@ const contactImportService = {
       action:      "IMPORT",
       entity:      "Import",
       entityId:    importLog._id,
-      description: `Contact import — ${successCount} saved, ${duplicateRows.length} duplicates need review`,
+      description: `Contact import — ${successCount} saved. Use Check Duplicates to review.`,
     });
 
     console.log(
       `🏁 Contact import — ${successCount} imported (${unlinkedCount} unlinked), ` +
-      `${errorDetails.length} skipped (missing email/name) | ${duplicateRows.length} duplicates pending`
+      `${errorDetails.length} skipped (missing email/name)`
     );
 
     return {
@@ -271,7 +172,7 @@ const contactImportService = {
       skippedCount:  errorDetails.length, // rows skipped for missing required fields (email/name)
       linkedCount,
       unlinkedCount,
-      duplicates:    duplicateRows,
+      duplicates:    duplicateRows,       // always [] now — populated later by /duplicates/check-contacts
       hasDuplicates,
       errorDetails:  allErrors,
       status:        finalStatus,
