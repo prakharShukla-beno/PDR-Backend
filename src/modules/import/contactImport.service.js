@@ -1,5 +1,6 @@
 import fs from "fs";
 import { processContactFile } from "../../common/utils/contactFileParser.js";
+import { normalizeAccountName } from "../../common/utils/contactImportHelpers.js";
 import Contact from "../contacts/contact.model.js";
 import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
@@ -92,22 +93,47 @@ const contactImportService = {
         if (acc.accountNameLower) accountMap[acc.accountNameLower] = acc;
       }
     }
+    // Fallback: Try normalized matching for unmatched account names
+    for (const accountName of uniqueAccountNames) {
+      const nameKey = accountName?.trim().toLowerCase();
+      if (!nameKey || accountMap[nameKey]) continue;
+
+      const normalized = normalizeAccountName(accountName);
+
+      const prospect = await Prospect.findOne({
+        companyId,
+        accountNameLower: {
+          $regex: new RegExp(
+            `^${normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+            "i"
+          ),
+        },
+      })
+        .select(
+          "_id accountName accountNameLower primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal website"
+        )
+        .lean();
+
+      if (prospect && prospect.accountNameLower) {
+        accountMap[nameKey] = prospect;
+      }
+    }
 
     // Prepare all rows — accountName resolves to accountId when a matching
     // account exists; otherwise the contact is inserted unlinked.
     const preparedRows = validRows.map((row) => {
-      const nameKey       = row.accountName?.trim().toLowerCase();
-      const prospect      = nameKey ? accountMap[nameKey] : null;
+      const nameKey = row.accountName?.trim().toLowerCase();
+      const prospect = nameKey ? accountMap[nameKey] : null;
       const accountFields = prospect ? extractAccountFields(prospect) : {};
 
       return {
         ...row,
         companyId,
-        accountId:   prospect ? prospect._id : null,
+        accountId: prospect ? prospect._id : null,
         accountName: row.accountName?.trim() || null,
-        isLinked:    !!prospect,
+        isLinked: !!prospect,
         ...accountFields,
-        source:      filePath.toLowerCase().endsWith(".csv") ? "csv" : "excel",
+        source: filePath.toLowerCase().endsWith(".csv") ? "csv" : "excel",
         importLogId: importLog._id,
       };
     });
