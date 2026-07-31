@@ -14,6 +14,110 @@ import Prospect from "../prospect/prospect.model.js";
 import Duplicate from "./duplicate.model.js";
 
 /**
+ * Process contact duplicates synchronously for small datasets (≤5000 records)
+ * Uses MongoDB aggregation pipeline for O(n) performance
+ */
+const processContactDuplicatesSync = async (cid, filter, importLogId) => {
+  // Step 1: Find duplicates using aggregation pipeline
+  const duplicatesByEmail = await Contact.aggregate([
+    { $match: { ...filter, email: { $exists: true, $nin: [null, ""] } } },
+    { $project: { _id: 1, email: 1, firstName: 1, lastName: 1, accountName: 1, importLogId: 1 } },
+    { $group: {
+        _id: { $toLower: "$email" },
+        count: { $sum: 1 },
+        contacts: { $push: "$$ROOT" }
+    }},
+    { $match: { count: { $gt: 1 } } }
+  ]);
+
+  const duplicatesByPhone = await Contact.aggregate([
+    { $match: { ...filter, primaryPhone: { $exists: true, $nin: [null, ""] } } },
+    { $project: { _id: 1, primaryPhone: 1, firstName: 1, lastName: 1, accountName: 1, importLogId: 1 } },
+    { $group: {
+        _id: { $toLower: "$primaryPhone" },
+        count: { $sum: 1 },
+        contacts: { $push: "$$ROOT" }
+    }},
+    { $match: { count: { $gt: 1 } } }
+  ]);
+
+  // Step 2: Process duplicates with bulk operations
+  const contactUpdates = [];
+  const duplicateRecords = [];
+  const processedIds = new Set();
+
+  // Process email duplicates
+  for (const group of duplicatesByEmail) {
+    const [existing, ...incoming] = group.contacts;
+    for (const c of incoming) {
+      if (processedIds.has(c._id.toString())) continue;
+      processedIds.add(c._id.toString());
+      
+      contactUpdates.push({
+        updateOne: { filter: { _id: c._id }, update: { $set: { isDuplicate: true } } }
+      });
+      duplicateRecords.push({
+        prospectId1: existing._id,
+        entityType: "Contact",
+        newData: { email: c.email, firstName: c.firstName, lastName: c.lastName, accountName: c.accountName },
+        matchFields: ["email"],
+        source: "import",
+        importLogId: c.importLogId || importLogId || null,
+        status: "pending",
+        companyId: cid,
+      });
+    }
+  }
+
+  // Process phone duplicates
+  for (const group of duplicatesByPhone) {
+    const [existing, ...incoming] = group.contacts;
+    for (const c of incoming) {
+      if (processedIds.has(c._id.toString())) continue;
+      processedIds.add(c._id.toString());
+      
+      contactUpdates.push({
+        updateOne: { filter: { _id: c._id }, update: { $set: { isDuplicate: true } } }
+      });
+      duplicateRecords.push({
+        prospectId1: existing._id,
+        entityType: "Contact",
+        newData: { primaryPhone: c.primaryPhone, firstName: c.firstName, lastName: c.lastName, accountName: c.accountName },
+        matchFields: ["primaryPhone"],
+        source: "import",
+        importLogId: c.importLogId || importLogId || null,
+        status: "pending",
+        companyId: cid,
+      });
+    }
+  }
+
+  // Step 3: Execute bulk operations
+  if (contactUpdates.length > 0) {
+    await Contact.bulkWrite(contactUpdates, { ordered: false });
+  }
+  if (duplicateRecords.length > 0) {
+    await Duplicate.insertMany(duplicateRecords, { ordered: false });
+    
+    // Step 4: Delete duplicate contacts from collection (move to duplicates page)
+    const duplicateContactIds = Array.from(processedIds).map(
+      id => new mongoose.Types.ObjectId(id)
+    );
+    
+    const deleteResult = await Contact.deleteMany({
+      _id: { $in: duplicateContactIds }
+    });
+    
+    console.log(`[ContactDuplicateCheck] Deleted ${deleteResult.deletedCount} duplicate contacts from collection`);
+  }
+
+  return {
+    checked: await Contact.countDocuments(filter),
+    duplicateCount: duplicateRecords.length,
+  };
+};
+
+/**
  * Process duplicates synchronously for small datasets (≤5000 records)
  * Uses MongoDB aggregation pipeline for O(n) performance
  */
@@ -625,6 +729,22 @@ const duplicateService = {
     }
 
     return results;
+  },
+
+  /**
+   * Check contact duplicates using MongoDB aggregation pipeline for O(n) performance.
+   * Similar to prospect duplicate check but for Contact collection.
+   */
+  checkContactDuplicates: async (companyId, importLogId = null) => {
+    const cid = companyObjectId(companyId);
+    const filter = { companyId: cid };
+    if (importLogId) filter.importLogId = new mongoose.Types.ObjectId(importLogId);
+
+    // Get total count first (fast)
+    const totalCount = await Contact.countDocuments(filter);
+
+    // Process synchronously
+    return await processContactDuplicatesSync(cid, filter, importLogId);
   },
 
   /**
