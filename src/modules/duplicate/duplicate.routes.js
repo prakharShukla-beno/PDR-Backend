@@ -6,14 +6,17 @@ import { adminOnly, editorPlus } from "../../common/middlewares/rbac.middleware.
 const router = Router();
 router.use(authMiddleware);
 
-router.get("/",              editorPlus, duplicateController.getAll);
-router.post("/check",        editorPlus, duplicateController.checkDuplicates);
-router.post("/bulk",         editorPlus, duplicateController.bulkAction);
-router.get("/:id",           editorPlus, duplicateController.getById);
-router.delete("/:id",        adminOnly,  duplicateController.deleteDuplicate);
-router.put("/:id/merge",     editorPlus, duplicateController.merge);
-router.put("/:id/skip",      editorPlus, duplicateController.skip);
-router.put("/:id/keep-both", editorPlus, duplicateController.keepBoth);
-router.put("/:id/dismiss",   editorPlus, duplicateController.dismiss);
+router.get("/",                editorPlus, duplicateController.getAll);
+router.post("/check",          editorPlus, duplicateController.checkDuplicates);
+router.get("/check/status",    editorPlus, duplicateController.getDuplicateCheckStatus);
+router.post("/check-contacts", editorPlus, duplicateController.checkContactDuplicates);
+router.get("/check-contacts/status", editorPlus, duplicateController.getContactDuplicateCheckStatus);
+router.post("/bulk",           editorPlus, duplicateController.bulkAction);
+router.get("/:id",             editorPlus, duplicateController.getById);
+router.delete("/:id",          adminOnly,  duplicateController.deleteDuplicate);
+router.put("/:id/merge",       editorPlus, duplicateController.merge);
+router.put("/:id/skip",        editorPlus, duplicateController.skip);
+router.put("/:id/keep-both",   editorPlus, duplicateController.keepBoth);
+router.put("/:id/dismiss",     editorPlus, duplicateController.dismiss);
 
 export default router;

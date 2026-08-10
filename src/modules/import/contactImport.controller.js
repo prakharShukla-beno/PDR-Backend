@@ -5,7 +5,9 @@ import { getCompanyIdFromRequest } from "../../common/utils/tenantScope.js";
 const contactImportController = {
 
   // POST /api/import/contacts
-  // Upload contact file — new ones save, duplicates return for review
+  // SYNC upload — waits for the full import to finish before responding.
+  // Kept for backward compatibility / small files. Prefer uploadFileAsync
+  // for the UI so large files don't hit request/proxy timeouts.
   uploadFile: async (req, res, next) => {
     try {
       if (!req.file) {
@@ -43,6 +45,46 @@ const contactImportController = {
           ? `${result.successCount} contacts saved${unlinkedSuffix}. ${result.duplicates.length} duplicates need your review.`
           : `Import complete — ${result.successCount} of ${result.totalRows} contacts saved${unlinkedSuffix}.`) + skippedSuffix,
         data: result,
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /api/import/contacts/async
+  // ASYNC upload — responds immediately with an importLogId while the
+  // parsing/linking/insert work happens in the background. The frontend
+  // should poll GET /api/import/contacts/status/:importLogId until the
+  // status becomes "completed" | "partial" | "failed".
+  uploadFileAsync: async (req, res, next) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No file uploaded. Please upload an Excel or CSV file.",
+        });
+      }
+
+      if (!req.file.originalname.match(/\.(xlsx|xls|csv)$/i)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid file type. Only .xlsx, .xls and .csv files are allowed.",
+        });
+      }
+
+      const filePath   = req.file.path;
+      const companyId  = getCompanyIdFromRequest(req);
+
+      const { importLogId } = await contactImportService.processContactImportAsync(filePath, {
+        userId: req.user._id,
+        companyId,
+      });
+
+      return res.status(202).json({
+        success: true,
+        message: "Import started",
+        data: { importLogId, status: "processing" },
       });
 
     } catch (error) {

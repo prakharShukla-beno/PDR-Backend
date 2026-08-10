@@ -1,23 +1,14 @@
 import fs from "fs";
 import { processContactFile } from "../../common/utils/contactFileParser.js";
+import { normalizeAccountName } from "../../common/utils/contactImportHelpers.js";
 import Contact from "../contacts/contact.model.js";
 import importLogRepository from "../importLog/importLog.repository.js";
 import notificationService from "../notification/notification.service.js";
 import auditLogService from "../auditLog/auditLog.service.js";
 import Prospect from "../prospect/prospect.model.js";
-import duplicateRepository from "../duplicate/duplicate.repository.js";
 import {
   isEmpty,
   hasValue,
-  buildContactDedupIndexes,
-  findDbContactDuplicate,
-  createInFileDedupTracker,
-  checkInFileDuplicate,
-  registerInFileRow,
-  fetchExistingContactsForDedup,
-  normEmail,
-  normPhone,
-  nameAccountKey,
 } from "../../common/utils/contactDedup.js";
 
 const CHUNK_SIZE = 1000;
@@ -55,227 +46,228 @@ const safeInsertMany = async (docs, chunkNum) => {
   }
 };
 
+// Build accountName → Prospect map (exact match + normalized fallback)
+const buildAccountMap = async (uniqueAccountNames, companyId) => {
+  const accountMap = {};
+
+  if (uniqueAccountNames.length > 0) {
+    const accounts = await Prospect.find({
+      companyId,
+      accountNameLower: { $in: uniqueAccountNames.map((n) => n.toLowerCase()) },
+    })
+      .select(
+        "_id accountName accountNameLower primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal website"
+      )
+      .lean();
+
+    for (const acc of accounts) {
+      if (acc.accountNameLower) accountMap[acc.accountNameLower] = acc;
+    }
+  }
+
+  // Fallback: normalized matching for names that didn't match exactly
+  for (const accountName of uniqueAccountNames) {
+    const nameKey = accountName?.trim().toLowerCase();
+    if (!nameKey || accountMap[nameKey]) continue;
+
+    const normalized = normalizeAccountName(accountName);
+    if (!normalized) continue;
+
+    const prospect = await Prospect.findOne({
+      companyId,
+      accountNameLower: {
+        $regex: new RegExp(
+          `^${normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+          "i"
+        ),
+      },
+    })
+      .select(
+        "_id accountName accountNameLower primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal website"
+      )
+      .lean();
+
+    if (prospect && prospect.accountNameLower) {
+      accountMap[nameKey] = prospect;
+    }
+  }
+
+  return accountMap;
+};
+
+// ==========================================================================
+// Core import runner — shared by both the sync and async entry points.
+// Parses the file, links accounts, inserts contacts in chunks, and keeps
+// the ImportLog document updated as progress happens (so status polling
+// works for the async flow).
+// ==========================================================================
+const runContactImportJob = async (filePath, importLog, { userId, companyId }) => {
+  const { validRows, errorDetails, totalRows } = processContactFile(filePath);
+
+  console.log(`📊 Total: ${totalRows}, Valid: ${validRows.length}, Errors: ${errorDetails.length}`);
+
+  await importLogRepository.update(importLog._id, {
+    totalRows,
+    failedCount: errorDetails.length,
+    errorDetails,
+  });
+
+  if (!validRows || validRows.length === 0) {
+    await importLogRepository.update(importLog._id, { status: "failed", failedCount: errorDetails.length });
+    try { fs.unlinkSync(filePath); } catch (_) {}
+    return {
+      importLogId: importLog._id, totalRows, successCount: 0,
+      failedCount: errorDetails.length, skippedCount: errorDetails.length,
+      linkedCount: 0, unlinkedCount: 0, duplicates: [], errorDetails, status: "failed",
+    };
+  }
+
+  // Build accountName → account map for linking
+  const uniqueAccountNames = [...new Set(validRows.map((r) => r.accountName?.trim()).filter(Boolean))];
+  const accountMap = await buildAccountMap(uniqueAccountNames, companyId);
+
+  // Prepare all rows — accountName resolves to accountId when a matching
+  // account exists; otherwise the contact is inserted unlinked.
+  const preparedRows = validRows.map((row) => {
+    const nameKey = row.accountName?.trim().toLowerCase();
+    const prospect = nameKey ? accountMap[nameKey] : null;
+    const accountFields = prospect ? extractAccountFields(prospect) : {};
+
+    return {
+      ...row,
+      companyId,
+      accountId: prospect ? prospect._id : null,
+      accountName: row.accountName?.trim() || null,
+      isLinked: !!prospect,
+      ...accountFields,
+      source: filePath.toLowerCase().endsWith(".csv") ? "csv" : "excel",
+      importLogId: importLog._id,
+    };
+  });
+
+  const newRows       = preparedRows;
+  const duplicateRows = [];
+  const insertErrors  = [];
+
+  const unlinkedCount = newRows.filter((r) => !r.isLinked).length;
+  const linkedCount   = newRows.length - unlinkedCount;
+
+  console.log(`📦 New: ${newRows.length} (${linkedCount} linked, ${unlinkedCount} unlinked)`);
+
+  let successCount = 0;
+
+  for (let i = 0; i < newRows.length; i += CHUNK_SIZE) {
+    const chunk    = newRows.slice(i, i + CHUNK_SIZE);
+    const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
+    const inserted = await safeInsertMany(chunk, chunkNum);
+    successCount  += inserted;
+    if (inserted < chunk.length) insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
+
+    // Progressive update so status polling shows live progress
+    await importLogRepository.update(importLog._id, { successCount });
+  }
+
+  const allErrors     = [...errorDetails, ...insertErrors];
+  const hasDuplicates = false;
+  const finalStatus   =
+    successCount === 0                    ? "failed"  :
+    successCount < newRows.length         ? "partial" :
+    "completed";
+
+  await importLogRepository.update(importLog._id, {
+    successCount,
+    failedCount:  allErrors.length,
+    errorDetails: allErrors,
+    status:       finalStatus,
+  });
+
+  try { fs.unlinkSync(filePath); } catch (_) {}
+
+  await auditLogService.log({
+    userId,
+    action:      "IMPORT",
+    entity:      "Import",
+    entityId:    importLog._id,
+    description: `Contact import — ${successCount} saved. Use Check Duplicates to review.`,
+  });
+
+  console.log(
+    `🏁 Contact import — ${successCount} imported (${unlinkedCount} unlinked), ` +
+    `${errorDetails.length} skipped (missing email/name)`
+  );
+
+  return {
+    importLogId:   importLog._id,
+    totalRows,
+    successCount,
+    failedCount:   allErrors.length,
+    skippedCount:  errorDetails.length,
+    linkedCount,
+    unlinkedCount,
+    duplicates:    duplicateRows,
+    hasDuplicates,
+    errorDetails:  allErrors,
+    status:        finalStatus,
+  };
+};
+
 const contactImportService = {
 
   // ==========================================================================
-  // CONTACT IMPORT — Step 1
-  // Save non-duplicates and return duplicates to the user for review
-  // Duplicate = email OR phone OR (firstName + lastName + accountName) match
+  // CONTACT IMPORT (SYNC) — kept for backward compatibility.
+  // Blocks until the entire file is processed. Fine for small files, but
+  // large files (10k+ rows) risk hitting request/proxy timeouts on hosts
+  // like Render. Prefer processContactImportAsync for the upload UI.
   // ==========================================================================
   processContactImport: async (filePath, { userId, companyId }) => {
-
-    const { validRows, errorDetails, totalRows } = processContactFile(filePath);
-
-    console.log(`📊 Total: ${totalRows}, Valid: ${validRows.length}, Errors: ${errorDetails.length}`);
-
     const importLog = await importLogRepository.create({
       fileName:     filePath.split(/[\\\/]/).pop(),
       importType:   "excel",
       uploadedBy:   userId,
       companyId,
-      totalRows,
+      totalRows:    0,
       successCount: 0,
-      failedCount:  errorDetails.length,
-      errorDetails,
+      failedCount:  0,
+      errorDetails: [],
       status:       "processing",
     });
 
-    if (!validRows || validRows.length === 0) {
-      await importLogRepository.update(importLog._id, { status: "failed", failedCount: errorDetails.length });
-      try { fs.unlinkSync(filePath); } catch (_) {}
-      return { importLogId: importLog._id, totalRows, successCount: 0, failedCount: errorDetails.length, skippedCount: errorDetails.length, linkedCount: 0, unlinkedCount: 0, duplicates: [], errorDetails, status: "failed" };
-    }
+    return runContactImportJob(filePath, importLog, { userId, companyId });
+  },
 
-    // Get account map for linking
-    const uniqueAccountNames = [...new Set(validRows.map(r => r.accountName?.trim()).filter(Boolean))];
-    const accountMap = {};
-
-    if (uniqueAccountNames.length > 0) {
-      const accounts = await Prospect.find({
-        companyId,
-        accountNameLower: { $in: uniqueAccountNames.map(n => n.toLowerCase()) },
-      }).select("_id accountName accountNameLower primaryIndustry country hqLocationCity noOfEmployees annualRevenue businessModel salesPriority clvRanking techFitScore intentSignal website").lean();
-
-      for (const acc of accounts) {
-        if (acc.accountNameLower) accountMap[acc.accountNameLower] = acc;
-      }
-    }
-
-    // Prepare all rows first so we can batch-fetch existing contacts for dedup
-    const preparedRows = validRows.map((row) => {
-      const nameKey       = row.accountName?.trim().toLowerCase();
-      const prospect      = nameKey ? accountMap[nameKey] : null;
-      const accountFields = prospect ? extractAccountFields(prospect) : {};
-
-      return {
-        ...row,
-        companyId,
-        accountId:   prospect ? prospect._id : null,
-        accountName: row.accountName?.trim() || null,
-        isLinked:    !!prospect,
-        ...accountFields,
-        source:      filePath.toLowerCase().endsWith(".csv") ? "csv" : "excel",
-        importLogId: importLog._id,
-      };
+  // ==========================================================================
+  // CONTACT IMPORT (ASYNC) — mirrors the account import's async job pattern.
+  // Creates the ImportLog immediately and returns its id right away; the
+  // actual parsing/linking/insert work happens in the background so the
+  // HTTP request returns instantly and never hits a timeout.
+  // ==========================================================================
+  processContactImportAsync: async (filePath, { userId, companyId }) => {
+    const importLog = await importLogRepository.create({
+      fileName:     filePath.split(/[\\\/]/).pop(),
+      importType:   "excel",
+      uploadedBy:   userId,
+      companyId,
+      totalRows:    0,
+      successCount: 0,
+      failedCount:  0,
+      errorDetails: [],
+      status:       "processing",
     });
 
-    const existingContacts = await fetchExistingContactsForDedup(Contact, preparedRows, companyId);
-    const dedupIndexes     = buildContactDedupIndexes(existingContacts);
-    const fileTracker      = createInFileDedupTracker();
+    // Fire-and-forget — same 100ms-deferred pattern used by the account
+    // import worker, so the response can flush before heavy work starts.
+    setTimeout(() => {
+      runContactImportJob(filePath, importLog, { userId, companyId }).catch(async (err) => {
+        console.error(`Contact import ${importLog._id} failed:`, err.message);
+        await importLogRepository.update(importLog._id, {
+          status: "failed",
+          errorDetails: [err.message],
+        }).catch(() => {});
+        try { fs.unlinkSync(filePath); } catch (_) {}
+      });
+    }, 100);
 
-    const newRows           = [];
-    const duplicateRows     = [];
-    const deferredInFileDups = [];
-    const insertErrors      = [];
-
-    for (const preparedRow of preparedRows) {
-      const dbDup = findDbContactDuplicate(preparedRow, dedupIndexes);
-      if (dbDup) {
-        await duplicateRepository.create({
-          prospectId1: dbDup.existing._id,
-          entityType:  "Contact",
-          newData:     preparedRow,
-          matchFields: dbDup.matchFields,
-          source:      "import",
-          importLogId: importLog._id,
-          status:      "pending",
-          companyId,
-        });
-        duplicateRows.push({
-          newData:      preparedRow,
-          existingData: dbDup.existing,
-          matchFields:  dbDup.matchFields,
-        });
-        continue;
-      }
-
-      const inFileDup = checkInFileDuplicate(preparedRow, fileTracker);
-      if (inFileDup) {
-        deferredInFileDups.push({
-          preparedRow,
-          matchFields:  inFileDup.matchFields,
-          firstRowData: inFileDup.firstRow,
-        });
-        insertErrors.push(
-          `In-file duplicate (${inFileDup.matchFields.join(", ")}): ` +
-          `${preparedRow.email || preparedRow.primaryPhone || `${preparedRow.firstName} ${preparedRow.lastName}`.trim()}`
-        );
-        continue;
-      }
-
-      registerInFileRow(preparedRow, fileTracker);
-      newRows.push(preparedRow);
-    }
-
-    // Account matching never rejects a row — unmatched/absent accountName just means
-    // the contact is inserted with accountId: null, isLinked: false (unlinked).
-    const unlinkedCount = newRows.filter((r) => !r.isLinked).length;
-    const linkedCount   = newRows.length - unlinkedCount;
-
-    console.log(`📦 New: ${newRows.length} (${linkedCount} linked, ${unlinkedCount} unlinked) | DB Duplicates: ${duplicateRows.length} | In-file skipped: ${deferredInFileDups.length}`);
-
-    let successCount = 0;
-
-    for (let i = 0; i < newRows.length; i += CHUNK_SIZE) {
-      const chunk    = newRows.slice(i, i + CHUNK_SIZE);
-      const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
-      const inserted = await safeInsertMany(chunk, chunkNum);
-      successCount  += inserted;
-      if (inserted < chunk.length) insertErrors.push(`Chunk ${chunkNum}: ${chunk.length - inserted} rows failed`);
-      await importLogRepository.update(importLog._id, { successCount });
-    }
-
-    // Flag in-file duplicates for review once the first row is saved
-    if (deferredInFileDups.length > 0 && successCount > 0) {
-      const insertedContacts = await Contact.find({
-        importLogId: importLog._id,
-        companyId,
-      })
-        .select("_id email primaryPhone firstName lastName accountName")
-        .lean();
-
-      const insertedByEmail = {};
-      const insertedByPhone = {};
-      const insertedByNameAccount = {};
-      for (const c of insertedContacts) {
-        const email = normEmail(c.email);
-        if (email) insertedByEmail[email] = c;
-        const phone = normPhone(c.primaryPhone);
-        if (phone) insertedByPhone[phone] = c;
-        const nameKey = nameAccountKey(c);
-        if (nameKey) insertedByNameAccount[nameKey] = c;
-      }
-
-      for (const dup of deferredInFileDups) {
-        const first = dup.firstRowData;
-        const existing =
-          (normEmail(first.email) && insertedByEmail[normEmail(first.email)]) ||
-          (normPhone(first.primaryPhone) && insertedByPhone[normPhone(first.primaryPhone)]) ||
-          (nameAccountKey(first) && insertedByNameAccount[nameAccountKey(first)]);
-
-        if (existing) {
-          await duplicateRepository.create({
-            prospectId1: existing._id,
-            entityType:  "Contact",
-            newData:     dup.preparedRow,
-            matchFields: dup.matchFields,
-            source:      "import",
-            importLogId: importLog._id,
-            status:      "pending",
-            companyId,
-          });
-          duplicateRows.push({
-            newData:      dup.preparedRow,
-            existingData: existing,
-            matchFields:  dup.matchFields,
-          });
-        }
-      }
-    }
-
-    const allErrors     = [...errorDetails, ...insertErrors];
-    const hasDuplicates = duplicateRows.length > 0;
-    const finalStatus   =
-      successCount === 0 && !hasDuplicates ? "failed"  :
-      hasDuplicates                        ? "partial" :
-      successCount < newRows.length        ? "partial" :
-      "completed";
-
-    await importLogRepository.update(importLog._id, {
-      successCount,
-      failedCount:  allErrors.length,
-      errorDetails: allErrors,
-      status:       finalStatus,
-    });
-
-    try { fs.unlinkSync(filePath); } catch (_) {}
-
-    await auditLogService.log({
-      userId,
-      action:      "IMPORT",
-      entity:      "Import",
-      entityId:    importLog._id,
-      description: `Contact import — ${successCount} saved, ${duplicateRows.length} duplicates need review`,
-    });
-
-    console.log(
-      `🏁 Contact import — ${successCount} imported (${unlinkedCount} unlinked), ` +
-      `${errorDetails.length} skipped (missing email/name) | ${duplicateRows.length} duplicates pending`
-    );
-
-    return {
-      importLogId:   importLog._id,
-      totalRows,
-      successCount,
-      failedCount:   allErrors.length,
-      skippedCount:  errorDetails.length, // rows skipped for missing required fields (email/name)
-      linkedCount,
-      unlinkedCount,
-      duplicates:    duplicateRows,
-      hasDuplicates,
-      errorDetails:  allErrors,
-      status:        finalStatus,
-    };
+    return { importLogId: importLog._id, status: "processing" };
   },
 
   // ==========================================================================

@@ -73,6 +73,8 @@ const duplicateController = {
   },
 
   // POST /api/duplicates/check — scan prospects for duplicates
+  // For large datasets this returns immediately with status "processing";
+  // the frontend should poll GET /api/duplicates/check/status.
   checkDuplicates: async (req, res, next) => {
     try {
       const companyId = getCompanyIdFromRequest(req);
@@ -83,11 +85,72 @@ const duplicateController = {
         importLogId || null
       );
 
-      res.status(200).json({
+      const isAsync = result.status === "processing";
+
+      res.status(isAsync ? 202 : 200).json({
         success: true,
-        message: `Duplicate check complete — ${result.duplicateCount} found`,
+        message: isAsync
+          ? result.message
+          : `Duplicate check complete — ${result.duplicateCount} found`,
         data: result,
       });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // GET /api/duplicates/check/status — poll while an async account
+  // duplicate check runs in the background
+  getDuplicateCheckStatus: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const { importLogId } = req.query;
+      const result = await duplicateService.getDuplicateCheckStatus(companyId, importLogId || null);
+      res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /api/duplicates/check-contacts — scan contacts for duplicates
+  // For large datasets (5000+) this returns immediately with status
+  // "processing"; the frontend should poll GET /api/duplicates/check-contacts/status.
+  checkContactDuplicates: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const { importLogId } = req.body || {};
+
+      console.log("[ContactDuplicateCheck] Starting:", { companyId, importLogId });
+
+      const result = await duplicateService.checkContactDuplicates(
+        companyId,
+        importLogId || null
+      );
+
+      console.log("[ContactDuplicateCheck] Response:", result);
+
+      const isAsync = result.status === "processing";
+
+      res.status(isAsync ? 202 : 200).json({
+        success: true,
+        message: isAsync
+          ? result.message
+          : `Contact duplicate check complete — ${result.duplicateCount} found`,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // GET /api/duplicates/check-contacts/status — poll while an async contact
+  // duplicate check runs in the background
+  getContactDuplicateCheckStatus: async (req, res, next) => {
+    try {
+      const companyId = getCompanyIdFromRequest(req);
+      const { importLogId } = req.query;
+      const result = await duplicateService.getContactDuplicateCheckStatus(companyId, importLogId || null);
+      res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);
     }

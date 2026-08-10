@@ -13,6 +13,230 @@ import { companyObjectId } from "../../common/utils/tenantScope.js";
 import Prospect from "../prospect/prospect.model.js";
 import Duplicate from "./duplicate.model.js";
 
+const CONTACT_DUPLICATE_ASYNC_THRESHOLD = 5000;
+
+/**
+ * Process contact duplicates synchronously for small datasets (≤5000 records)
+ * Uses MongoDB aggregation pipeline for O(n) performance
+ */
+const processContactDuplicatesSync = async (cid, filter, importLogId) => {
+  // Step 1: Find duplicates using aggregation pipeline
+  const duplicatesByEmail = await Contact.aggregate([
+    { $match: { ...filter, email: { $exists: true, $nin: [null, ""] } } },
+    { $project: { _id: 1, email: 1, firstName: 1, lastName: 1, accountName: 1, importLogId: 1 } },
+    { $group: {
+        _id: { $toLower: "$email" },
+        count: { $sum: 1 },
+        contacts: { $push: "$$ROOT" }
+    }},
+    { $match: { count: { $gt: 1 } } }
+  ]);
+
+  const duplicatesByPhone = await Contact.aggregate([
+    { $match: { ...filter, primaryPhone: { $exists: true, $nin: [null, ""] } } },
+    { $project: { _id: 1, primaryPhone: 1, firstName: 1, lastName: 1, accountName: 1, importLogId: 1 } },
+    { $group: {
+        _id: { $toLower: "$primaryPhone" },
+        count: { $sum: 1 },
+        contacts: { $push: "$$ROOT" }
+    }},
+    { $match: { count: { $gt: 1 } } }
+  ]);
+
+  // Step 2: Process duplicates with bulk operations
+  const contactUpdates = [];
+  const duplicateRecords = [];
+  const processedIds = new Set();
+
+  // Process email duplicates
+  for (const group of duplicatesByEmail) {
+    const [existing, ...incoming] = group.contacts;
+    for (const c of incoming) {
+      if (processedIds.has(c._id.toString())) continue;
+      processedIds.add(c._id.toString());
+
+      contactUpdates.push({
+        updateOne: { filter: { _id: c._id }, update: { $set: { isDuplicate: true } } }
+      });
+      duplicateRecords.push({
+        prospectId1: existing._id,
+        entityType: "Contact",
+        newData: { email: c.email, firstName: c.firstName, lastName: c.lastName, accountName: c.accountName },
+        matchFields: ["email"],
+        source: "import",
+        importLogId: c.importLogId || importLogId || null,
+        status: "pending",
+        companyId: cid,
+      });
+    }
+  }
+
+  // Process phone duplicates
+  for (const group of duplicatesByPhone) {
+    const [existing, ...incoming] = group.contacts;
+    for (const c of incoming) {
+      if (processedIds.has(c._id.toString())) continue;
+      processedIds.add(c._id.toString());
+
+      contactUpdates.push({
+        updateOne: { filter: { _id: c._id }, update: { $set: { isDuplicate: true } } }
+      });
+      duplicateRecords.push({
+        prospectId1: existing._id,
+        entityType: "Contact",
+        newData: { primaryPhone: c.primaryPhone, firstName: c.firstName, lastName: c.lastName, accountName: c.accountName },
+        matchFields: ["primaryPhone"],
+        source: "import",
+        importLogId: c.importLogId || importLogId || null,
+        status: "pending",
+        companyId: cid,
+      });
+    }
+  }
+
+  // Step 3: Execute bulk operations
+  if (contactUpdates.length > 0) {
+    await Contact.bulkWrite(contactUpdates, { ordered: false });
+  }
+  if (duplicateRecords.length > 0) {
+    await Duplicate.insertMany(duplicateRecords, { ordered: false });
+
+    // Step 4: Delete duplicate contacts from collection (move to duplicates page)
+    const duplicateContactIds = Array.from(processedIds).map(
+      id => new mongoose.Types.ObjectId(id)
+    );
+
+    const deleteResult = await Contact.deleteMany({
+      _id: { $in: duplicateContactIds }
+    });
+
+    console.log(`[ContactDuplicateCheck] Deleted ${deleteResult.deletedCount} duplicate contacts from collection`);
+  }
+
+  return {
+    checked: await Contact.countDocuments(filter),
+    duplicateCount: duplicateRecords.length,
+  };
+};
+
+/**
+ * Process contact duplicates asynchronously for large datasets (5000+ records).
+ * Same detection logic as the sync version, but writes happen in batches and
+ * the caller does NOT await this — it returns immediately with a
+ * "processing" status so the HTTP request never hits a timeout.
+ */
+const processContactDuplicatesAsync = async (cid, filter, importLogId) => {
+  console.log(`[ContactDuplicateCheck] Starting async processing for company ${cid}`);
+
+  try {
+    const BATCH_SIZE = 2000;
+
+    const duplicatesByEmail = await Contact.aggregate([
+      { $match: { ...filter, email: { $exists: true, $nin: [null, ""] } } },
+      { $project: { _id: 1, email: 1, firstName: 1, lastName: 1, accountName: 1, importLogId: 1 } },
+      { $group: {
+          _id: { $toLower: "$email" },
+          count: { $sum: 1 },
+          contacts: { $push: "$$ROOT" }
+      }},
+      { $match: { count: { $gt: 1 } } }
+    ]);
+
+    const duplicatesByPhone = await Contact.aggregate([
+      { $match: { ...filter, primaryPhone: { $exists: true, $nin: [null, ""] } } },
+      { $project: { _id: 1, primaryPhone: 1, firstName: 1, lastName: 1, accountName: 1, importLogId: 1 } },
+      { $group: {
+          _id: { $toLower: "$primaryPhone" },
+          count: { $sum: 1 },
+          contacts: { $push: "$$ROOT" }
+      }},
+      { $match: { count: { $gt: 1 } } }
+    ]);
+
+    const contactUpdates = [];
+    const duplicateRecords = [];
+    const processedIds = new Set();
+
+    for (const group of duplicatesByEmail) {
+      const [existing, ...incoming] = group.contacts;
+      for (const c of incoming) {
+        if (processedIds.has(c._id.toString())) continue;
+        processedIds.add(c._id.toString());
+
+        contactUpdates.push({
+          updateOne: { filter: { _id: c._id }, update: { $set: { isDuplicate: true } } }
+        });
+        duplicateRecords.push({
+          prospectId1: existing._id,
+          entityType: "Contact",
+          newData: { email: c.email, firstName: c.firstName, lastName: c.lastName, accountName: c.accountName },
+          matchFields: ["email"],
+          source: "import",
+          importLogId: c.importLogId || importLogId || null,
+          status: "pending",
+          companyId: cid,
+        });
+      }
+    }
+
+    for (const group of duplicatesByPhone) {
+      const [existing, ...incoming] = group.contacts;
+      for (const c of incoming) {
+        if (processedIds.has(c._id.toString())) continue;
+        processedIds.add(c._id.toString());
+
+        contactUpdates.push({
+          updateOne: { filter: { _id: c._id }, update: { $set: { isDuplicate: true } } }
+        });
+        duplicateRecords.push({
+          prospectId1: existing._id,
+          entityType: "Contact",
+          newData: { primaryPhone: c.primaryPhone, firstName: c.firstName, lastName: c.lastName, accountName: c.accountName },
+          matchFields: ["primaryPhone"],
+          source: "import",
+          importLogId: c.importLogId || importLogId || null,
+          status: "pending",
+          companyId: cid,
+        });
+      }
+    }
+
+    // Write in batches so no single operation is huge
+    let processedCount = 0;
+    for (let i = 0; i < contactUpdates.length; i += BATCH_SIZE) {
+      const batchUpdates = contactUpdates.slice(i, i + BATCH_SIZE);
+      const batchRecords = duplicateRecords.slice(i, i + BATCH_SIZE);
+
+      if (batchUpdates.length > 0) {
+        await Contact.bulkWrite(batchUpdates, { ordered: false });
+      }
+      if (batchRecords.length > 0) {
+        await Duplicate.insertMany(batchRecords, { ordered: false });
+      }
+      processedCount += batchUpdates.length;
+      console.log(`[ContactDuplicateCheck] Processed ${processedCount}/${contactUpdates.length} duplicates`);
+    }
+
+    // Delete all duplicate contacts from collection after processing
+    if (processedIds.size > 0) {
+      const duplicateContactIds = Array.from(processedIds).map(
+        id => new mongoose.Types.ObjectId(id)
+      );
+
+      const deleteResult = await Contact.deleteMany({
+        _id: { $in: duplicateContactIds }
+      });
+
+      console.log(`[ContactDuplicateCheck] Deleted ${deleteResult.deletedCount} duplicate contacts from collection`);
+    }
+
+    console.log(`[ContactDuplicateCheck] Completed. Total duplicates: ${duplicateRecords.length}`);
+  } catch (err) {
+    console.error("[ContactDuplicateCheck] Error:", err.message);
+    throw err;
+  }
+};
+
 /**
  * Process duplicates synchronously for small datasets (≤5000 records)
  * Uses MongoDB aggregation pipeline for O(n) performance
@@ -52,7 +276,7 @@ const processDuplicatesSync = async (cid, filter, importLogId) => {
     for (const p of incoming) {
       if (processedIds.has(p._id.toString())) continue;
       processedIds.add(p._id.toString());
-      
+
       prospectUpdates.push({
         updateOne: { filter: { _id: p._id }, update: { $set: { isDuplicate: true } } }
       });
@@ -75,7 +299,7 @@ const processDuplicatesSync = async (cid, filter, importLogId) => {
     for (const p of incoming) {
       if (processedIds.has(p._id.toString())) continue;
       processedIds.add(p._id.toString());
-      
+
       prospectUpdates.push({
         updateOne: { filter: { _id: p._id }, update: { $set: { isDuplicate: true } } }
       });
@@ -98,16 +322,16 @@ const processDuplicatesSync = async (cid, filter, importLogId) => {
   }
   if (duplicateRecords.length > 0) {
     await Duplicate.insertMany(duplicateRecords, { ordered: false });
-    
+
     // Step 4: Delete duplicate prospects from collection (move to duplicates page)
     const duplicateProspectIds = Array.from(processedIds).map(
       id => new mongoose.Types.ObjectId(id)
     );
-    
+
     const deleteResult = await Prospect.deleteMany({
       _id: { $in: duplicateProspectIds }
     });
-    
+
     console.log(`[DuplicateCheck] Deleted ${deleteResult.deletedCount} duplicate prospects from collection`);
   }
 
@@ -168,7 +392,7 @@ const processDuplicatesAsync = async (cid, filter, importLogId) => {
       for (const p of incoming) {
         if (processedIds.has(p._id.toString())) continue;
         processedIds.add(p._id.toString());
-        
+
         prospectUpdates.push({
           updateOne: { filter: { _id: p._id }, update: { $set: { isDuplicate: true } } }
         });
@@ -191,7 +415,7 @@ const processDuplicatesAsync = async (cid, filter, importLogId) => {
       for (const p of incoming) {
         if (processedIds.has(p._id.toString())) continue;
         processedIds.add(p._id.toString());
-        
+
         prospectUpdates.push({
           updateOne: { filter: { _id: p._id }, update: { $set: { isDuplicate: true } } }
         });
@@ -212,7 +436,7 @@ const processDuplicatesAsync = async (cid, filter, importLogId) => {
     for (let i = 0; i < prospectUpdates.length; i += BATCH_SIZE) {
       const batchUpdates = prospectUpdates.slice(i, i + BATCH_SIZE);
       const batchRecords = duplicateRecords.slice(i, i + BATCH_SIZE);
-      
+
       if (batchUpdates.length > 0) {
         await Prospect.bulkWrite(batchUpdates, { ordered: false });
       }
@@ -228,11 +452,11 @@ const processDuplicatesAsync = async (cid, filter, importLogId) => {
       const duplicateProspectIds = Array.from(processedIds).map(
         id => new mongoose.Types.ObjectId(id)
       );
-      
+
       const deleteResult = await Prospect.deleteMany({
         _id: { $in: duplicateProspectIds }
       });
-      
+
       console.log(`[DuplicateCheck] Deleted ${deleteResult.deletedCount} duplicate prospects from collection`);
     }
 
@@ -628,6 +852,38 @@ const duplicateService = {
   },
 
   /**
+   * Check contact duplicates using MongoDB aggregation pipeline for O(n) performance.
+   * Small datasets (≤5000) run synchronously and return the final result.
+   * Large datasets run in the background and return a "processing" status
+   * immediately, so the HTTP request never hits a timeout — mirrors the
+   * account (Prospect) duplicate check behaviour.
+   */
+  checkContactDuplicates: async (companyId, importLogId = null) => {
+    const cid = companyObjectId(companyId);
+    const filter = { companyId: cid };
+    if (importLogId) filter.importLogId = new mongoose.Types.ObjectId(importLogId);
+
+    // Get total count first (fast)
+    const totalCount = await Contact.countDocuments(filter);
+
+    if (totalCount <= CONTACT_DUPLICATE_ASYNC_THRESHOLD) {
+      return await processContactDuplicatesSync(cid, filter, importLogId);
+    }
+
+    // For large datasets: start background processing and return immediately
+    processContactDuplicatesAsync(cid, filter, importLogId).catch((err) => {
+      console.error("[ContactDuplicateCheck] Background processing failed:", err.message);
+    });
+
+    return {
+      checked: totalCount,
+      duplicateCount: 0,
+      status: "processing",
+      message: `Duplicate check started in background for ${totalCount} contacts. Check status shortly.`,
+    };
+  },
+
+  /**
    * Check duplicates using MongoDB aggregation pipeline for O(n) performance.
    * Processes in background to avoid HTTP timeout on large datasets (100k+).
    */
@@ -658,7 +914,7 @@ const duplicateService = {
   },
 
   /**
-   * Get duplicate check status (for polling)
+   * Get duplicate check status (for polling) — accounts (Prospect)
    */
   getDuplicateCheckStatus: async (companyId, importLogId = null) => {
     const cid = companyObjectId(companyId);
@@ -671,6 +927,27 @@ const duplicateService = {
     return {
       pendingDuplicates: pendingCount,
       totalProspects,
+    };
+  },
+
+  /**
+   * Get contact duplicate check status (for polling).
+   * Since the async worker doesn't write a job/log record, "done" is
+   * inferred once the Contact collection count has stopped shrinking, or
+   * simply by pendingDuplicates existing. The frontend should poll a few
+   * times and then just refresh the contacts list either way.
+   */
+  getContactDuplicateCheckStatus: async (companyId, importLogId = null) => {
+    const cid = companyObjectId(companyId);
+    const filter = { companyId: cid, entityType: "Contact", status: "pending" };
+    if (importLogId) filter.importLogId = new mongoose.Types.ObjectId(importLogId);
+
+    const pendingCount = await Duplicate.countDocuments(filter);
+    const totalContacts = await Contact.countDocuments({ companyId: cid });
+
+    return {
+      pendingDuplicates: pendingCount,
+      totalContacts,
     };
   },
 };

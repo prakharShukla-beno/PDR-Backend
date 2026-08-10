@@ -41,6 +41,7 @@ const router = Router();
 router.use(authMiddleware);
 
 router.post("/",                   editorPlus, upload.single("file"), contactImportController.uploadFile);
+router.post("/async",              editorPlus, upload.single("file"), contactImportController.uploadFileAsync);
 router.post("/resolve-duplicates", editorPlus, contactImportController.resolveDuplicates);
 router.get("/status/:importLogId", viewerPlus, contactImportController.getStatus);
 

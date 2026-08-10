@@ -1,3 +1,12 @@
+export const normalizeAccountName = (name) => {
+  if (!name) return ""
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 const FUNCTIONAL_DOMAINS = [
   "Corporate Strategy", "Technology & Digital", "Data & AI",
   "Finance & Accounting", "Revenue & Growth", "Product & Creative",

@@ -148,8 +148,10 @@ const normalizeHeader = (h) =>
   String(h).toLowerCase().trim().replace(/\*/g, "").replace(/\s+/g, " ").trim();
 
 // ── Parse Excel ───────────────────────────────────────────────────────────────
+// `dense: true` makes xlsx store sheet data as arrays instead of per-cell
+// keyed objects, which significantly reduces memory usage for large files.
 const parseExcelFile = (filePath) => {
-  const workbook  = readFile(filePath);
+  const workbook  = readFile(filePath, { dense: true });
   const sheetName = workbook.SheetNames[0];
   const sheet     = workbook.Sheets[sheetName];
   return utils.sheet_to_json(sheet, { defval: null, raw: false });
@@ -177,9 +179,6 @@ const mapRowToContact = (rawRow) => {
 
     if (value !== null && value !== "" && value !== undefined) {
       mapped[schemaField] = String(value).trim();
-      if (schemaField === "email") {
-        console.log(`DEBUG mapRowToContact: email populated from column "${key}" (normalized "${normalizedKey}") = "${value}" -> "${mapped.email}"`);
-      }
     }
   }
 
@@ -214,13 +213,6 @@ const validateContactRow = (row, rowNumber) => {
   if (row.functionalDomain && !FUNCTIONAL_DOMAINS.includes(row.functionalDomain)) {
     row.functionalDomain = null; // invalid value → null, row save hogi
   }
-
-  console.log('VALIDATE CONTACT ROW:', JSON.stringify({
-    email: row.email,
-    firstName: row.firstName,
-    lastName: row.lastName,
-    rowNumber
-  }));
 
   // ── Email is required — skip rows missing it
   if (!row.email) {
